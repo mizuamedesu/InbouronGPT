@@ -38,6 +38,7 @@ export interface MetaEvent {
   preset_name: string
   preset_description: string
   system_prompt: string
+  user_text: string
   processors: string[]
   boost_phrases: string[]
   suppress_phrases: string[]
@@ -91,6 +92,39 @@ export interface Question {
   blurb: string
   presets: Preset[]
 }
+
+export type Mode = "conspiracy" | "shopping"
+
+export interface Product {
+  key: string
+  vendor: string
+  name: string
+  price: number
+  battery: string
+  highlight: string
+  drawback: string
+  rating: number
+  reviews: number
+}
+
+export interface ConspiracyScenario {
+  mode: "conspiracy"
+  name: string
+  blurb: string
+  system_prompt: string
+  questions: Question[]
+}
+
+export interface ShoppingScenario {
+  mode: "shopping"
+  name: string
+  blurb: string
+  system_prompt: string
+  question: string
+  products: Product[]
+}
+
+export type Scenario = ConspiracyScenario | ShoppingScenario
 
 export interface RuntimeConfig {
   provider: "mlx" | "ollama" | "openai_compat"

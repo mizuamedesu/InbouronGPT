@@ -48,12 +48,16 @@ class MetaEvent(BaseModel):
     preset_key: str
     preset_name: str
     preset_description: str
-    # 実際に使われたシステムプロンプト。素と曲げで必ず同一。
+    # 実際にモデルへ渡したシステムプロンプトと利用者の発話。
+    # どちらも素と曲げで必ず同一。
     system_prompt: str
+    user_text: str = ""
     processors: list[str] = Field(default_factory=list)
     boost_phrases: list[str] = Field(default_factory=list)
     suppress_phrases: list[str] = Field(default_factory=list)
     strength: float = 1.0
+    # 実際に使った乱数の種。同じ値を渡せば同じ結果を再現できる。
+    seed: int | None = None
 
 
 class StepEvent(BaseModel):

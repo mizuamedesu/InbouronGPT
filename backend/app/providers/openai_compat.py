@@ -31,7 +31,7 @@ from ..events import (
     TokenProb,
 )
 from ..presets import BiasPreset, get_preset
-from ..questions import get_question
+from ..scenarios import resolve
 from .base import GenerationRequest
 
 TOP_K = 8
@@ -131,20 +131,21 @@ class OpenAICompatProvider:
     # --- 生成 -------------------------------------------------------------
 
     async def stream(self, req: GenerationRequest) -> AsyncIterator[BaseModel]:
-        question = get_question(req.question_index)
-        preset = get_preset(req.question_index, req.preset_key)
+        r = resolve(req.mode, req.question_index, req.preset_key, req.target)
+        preset = r.preset
         can_bend = await self._probe()
 
         yield MetaEvent(
             provider=self.name,
             model=self.model,
             capabilities=self.capabilities(),
-            question_index=question.index,
-            question=question.text,
+            question_index=req.question_index,
+            question=r.question_text,
             preset_key=preset.key,
             preset_name=preset.name,
             preset_description=preset.description,
-            system_prompt=preset.system_prompt,
+            system_prompt=r.system_prompt,
+            user_text=r.user_text,
             processors=["TopKPhraseBias"] if can_bend else [],
             boost_phrases=list(preset.boost_phrases),
             suppress_phrases=list(preset.suppress_phrases),
@@ -152,21 +153,21 @@ class OpenAICompatProvider:
         )
 
         if can_bend:
-            async for ev in self._stream_bent(req, preset, question.text):
+            async for ev in self._stream_bent(req, preset, r):
                 yield ev
         else:
-            async for ev in self._stream_plain(req, preset, question.text):
+            async for ev in self._stream_plain(req, preset, r):
                 yield ev
 
     async def _stream_plain(
-        self, req, preset, user_text: str
+        self, req, preset, r
     ) -> AsyncIterator[BaseModel]:
         """logprobs が無いサーバー向け。チャット API でそのまま流す。"""
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": preset.system_prompt},
-                {"role": "user", "content": user_text},
+                {"role": "user", "content": r.user_text},
             ],
             "stream": True,
             "max_tokens": req.max_tokens,
@@ -209,10 +210,10 @@ class OpenAICompatProvider:
         )
 
     async def _stream_bent(
-        self, req, preset, user_text: str
+        self, req, preset, r
     ) -> AsyncIterator[BaseModel]:
         """1 トークンずつ生成し、返ってきた top-k を再ランクして選び直す。"""
-        prompt = f"{preset.system_prompt}\n\n質問: {user_text}\n回答: "
+        prompt = f"{r.system_prompt}\n\n{r.user_text}\n回答: "
         pieces: list[str] = []
         kls: list[float] = []
         flipped = 0

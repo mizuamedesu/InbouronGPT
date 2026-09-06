@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Sequence
@@ -39,7 +40,7 @@ from ..processors import (
     TapStore,
     TriggerPhraseLogitsProcessor,
 )
-from ..questions import get_question
+from ..scenarios import resolve
 from .base import GenerationRequest
 
 logger = logging.getLogger(__name__)
@@ -318,39 +319,52 @@ class MLXProvider:
             targeted_phrase=targeted,
         )
 
+    @staticmethod
+    def _resolve_seed(req: GenerationRequest) -> int:
+        """使う乱数の種を決める。
+
+        MLX の既定乱数キーはスレッドローカルで、新しいスレッドは必ず同じ
+        初期状態から始まる。生成は毎回ワーカースレッドで走らせているため、
+        明示的に種を与えないと何度実行しても完全に同じ文章が出てしまう。
+        """
+        return req.seed if req.seed is not None else secrets.randbelow(2**31)
+
     # --- 生成本体（同期） -------------------------------------------------
 
     def _generate_sync(self, req: GenerationRequest) -> Iterator[BaseModel]:
         model, tokenizer = self._ensure_loaded()
-        question = get_question(req.question_index)
-        preset = get_preset(req.question_index, req.preset_key)
+        r = resolve(req.mode, req.question_index, req.preset_key, req.target)
+        preset = r.preset
 
         # プロンプトは素/曲げで常に同一。差は logit 操作だけに限定する。
-        prompt_ids = self._build_prompt(tokenizer, preset.system_prompt, question.text)
+        prompt_ids = self._build_prompt(tokenizer, r.system_prompt, r.user_text)
         procs, phrase_procs = self._build_processors(tokenizer, preset, req.strength, prompt_ids)
         # 1.2B 級のモデルは放っておくと同じ節を繰り返す。これは操作の演出ではなく
         # 通常のデコード設定なので、素/曲げの両方に等しくかかる位置に置く。
         pre = make_logits_processors(repetition_penalty=req.repetition_penalty)
         chain, labels, store = self._interleave_taps(procs, pre=pre)
 
+        seed = self._resolve_seed(req)
+        mx.random.seed(seed)
+
         yield MetaEvent(
             provider=self.name,
             model=self._model_id,
             capabilities=self.capabilities(),
-            question_index=question.index,
-            question=question.text,
+            question_index=req.question_index,
+            question=r.question_text,
             preset_key=preset.key,
             preset_name=preset.name,
             preset_description=preset.description,
-            system_prompt=preset.system_prompt,
+            system_prompt=r.system_prompt,
+            user_text=r.user_text,
             processors=[p.name for p in procs],
             boost_phrases=list(preset.boost_phrases),
             suppress_phrases=list(preset.suppress_phrases),
             strength=req.strength,
+            seed=seed,
         )
 
-        if req.seed is not None:
-            mx.random.seed(req.seed)
         sampler = make_sampler(temp=req.temperature, top_p=req.top_p)
 
         pieces: list[str] = []

@@ -23,6 +23,7 @@
     --color-base-signal: var(--base-signal);
     --color-bent-signal: var(--bent-signal);
     --color-suppress-signal: var(--suppress-signal);
+    --color-marker: var(--marker);
     --color-subtle: var(--subtle);
 
     --color-ring: var(--ring);
@@ -55,6 +56,8 @@
     --base-signal: #9ca3af;
     --bent-signal: #e11d48;
     --suppress-signal: #2563eb;
+    /* 選択中のトークンに引く蛍光ペン。黄は赤より薄く見えるので濃いめに使う。 */
+    --marker: #fde047;
     --subtle: #f4f4f5;
 
     --background: #ffffff;
@@ -111,6 +114,48 @@
     .num {
         font-family: var(--font-mono);
         font-variant-numeric: tabular-nums;
+    }
+
+    /* 生成テキストの 1 トークン。クリックでその位置の分布に切り替える。
+       選択中は蛍光ペンで引いたような帯を重ねる。地の着色（押し上げの強さ）は
+       background-color 側に残したいので、帯は background-image で描く。 */
+    .token {
+        cursor: pointer;
+        padding-inline: 1px;
+        border-radius: 2px;
+        background-repeat: no-repeat;
+        background-position: 0 0;
+        -webkit-box-decoration-break: clone;
+        box-decoration-break: clone;
+    }
+
+    .token:hover {
+        background-image: linear-gradient(
+            transparent 46%,
+            color-mix(in oklab, var(--marker) 38%, transparent) 46%,
+            color-mix(in oklab, var(--marker) 38%, transparent) 93%,
+            transparent 93%
+        );
+    }
+
+    .token-on,
+    .token-on:hover {
+        background-image: linear-gradient(
+            transparent 44%,
+            color-mix(in oklab, var(--marker) 92%, transparent) 44%,
+            color-mix(in oklab, var(--marker) 92%, transparent) 94%,
+            transparent 94%
+        );
+        animation: marker-draw 190ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+}
+
+@keyframes marker-draw {
+    from {
+        background-size: 0% 100%;
+    }
+    to {
+        background-size: 100% 100%;
     }
 }
 

@@ -16,9 +16,10 @@ from pydantic import BaseModel
 
 from .config import RuntimeConfig, config_store
 from .events import ErrorEvent
-from .presets import PRESETS_BY_QUESTION
 from .providers import GenerationRequest, MLXProvider, OllamaProvider, OpenAICompatProvider
 from .questions import QUESTIONS
+from .scenarios import MODES, describe
+from .shopping import PRODUCTS_BY_KEY
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -53,30 +54,10 @@ def get_provider():
 # --- メタ情報 -------------------------------------------------------------
 
 
-@app.get("/api/questions")
-def list_questions() -> dict:
-    return {
-        "questions": [
-            {
-                "index": q.index,
-                "label": q.label,
-                "text": q.text,
-                "blurb": q.blurb,
-                "presets": [
-                    {
-                        "key": p.key,
-                        "name": p.name,
-                        "description": p.description,
-                        "boost_phrases": list(p.boost_phrases),
-                        "suppress_phrases": list(p.suppress_phrases),
-                        "is_control": "control" in p.tags,
-                    }
-                    for p in PRESETS_BY_QUESTION[q.index]
-                ],
-            }
-            for q in QUESTIONS
-        ]
-    }
+@app.get("/api/scenarios")
+def list_scenarios() -> dict:
+    """2つのシナリオと、それぞれの選択肢。自由入力は受け付けない。"""
+    return {"scenarios": describe()}
 
 
 @app.get("/api/config")
@@ -126,20 +107,28 @@ def _sse(payload: str) -> str:
 
 @app.get("/api/generate/stream")
 async def generate_stream(
-    index: int = Query(..., ge=0, le=3, description="質問の index。自由入力は受け付けない。"),
+    mode: str = Query("conspiracy", description="conspiracy | shopping"),
+    index: int = Query(0, ge=0, le=3, description="質問の index。自由入力は受け付けない。"),
     preset: str | None = Query(None),
+    target: str | None = Query(None, description="shopping で推させる対象 (A〜D)。"),
     strength: float = Query(1.0, ge=0.0, le=3.0),
     max_tokens: int | None = Query(None, ge=1, le=1024),
     temperature: float | None = Query(None, ge=0.0, le=2.0),
     top_p: float | None = Query(None, ge=0.0, le=1.0),
     seed: int | None = Query(None),
 ) -> StreamingResponse:
-    if not any(q.index == index for q in QUESTIONS):
+    if mode not in MODES:
+        raise HTTPException(400, f"unknown mode: {mode}")
+    if mode == "conspiracy" and not any(q.index == index for q in QUESTIONS):
         raise HTTPException(404, f"unknown question index: {index}")
+    if mode == "shopping" and target is not None and target not in PRODUCTS_BY_KEY:
+        raise HTTPException(400, f"unknown target: {target}")
 
     s = config_store.settings
     req = GenerationRequest(
+        mode=mode,
         question_index=index,
+        target=target,
         preset_key=preset,
         strength=strength,
         max_tokens=max_tokens if max_tokens is not None else s.max_tokens,

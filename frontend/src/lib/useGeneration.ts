@@ -2,8 +2,11 @@ import { useCallback, useRef, useState } from "react"
 import type { DoneEvent, MetaEvent, StepEvent, StreamEvent } from "./types"
 
 export interface RunParams {
+  mode: "conspiracy" | "shopping"
   index: number
   preset?: string
+  /** shopping で推させる対象 (A〜D)。未指定なら素の分布。 */
+  target?: string
   strength: number
   maxTokens: number
   temperature: number
@@ -49,12 +52,14 @@ export function useGeneration() {
     setState({ ...EMPTY, status: "streaming" })
 
     const q = new URLSearchParams({
+      mode: params.mode,
       index: String(params.index),
       strength: String(params.strength),
       max_tokens: String(params.maxTokens),
       temperature: String(params.temperature),
     })
     if (params.preset) q.set("preset", params.preset)
+    if (params.target) q.set("target", params.target)
     if (params.seed !== undefined) q.set("seed", String(params.seed))
 
     const es = new EventSource(`/api/generate/stream?${q}`)

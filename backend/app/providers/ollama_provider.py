@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from ..events import Capabilities, ChosenToken, DoneEvent, ErrorEvent, MetaEvent, StepEvent
 from ..presets import get_preset
-from ..questions import get_question
+from ..scenarios import resolve
 from .base import GenerationRequest
 
 
@@ -61,19 +61,20 @@ class OllamaProvider:
             return False, f"{self.base_url} に接続できない: {type(exc).__name__}: {exc}"
 
     async def stream(self, req: GenerationRequest) -> AsyncIterator[BaseModel]:
-        question = get_question(req.question_index)
-        preset = get_preset(req.question_index, req.preset_key)
+        r = resolve(req.mode, req.question_index, req.preset_key, req.target)
+        preset = r.preset
 
         yield MetaEvent(
             provider=self.name,
             model=self.model,
             capabilities=self.capabilities(),
-            question_index=question.index,
-            question=question.text,
+            question_index=req.question_index,
+            question=r.question_text,
             preset_key=preset.key,
             preset_name=preset.name,
             preset_description=preset.description,
-            system_prompt=preset.system_prompt,
+            system_prompt=r.system_prompt,
+            user_text=r.user_text,
             processors=[],
             boost_phrases=list(preset.boost_phrases),
             suppress_phrases=list(preset.suppress_phrases),
@@ -84,7 +85,7 @@ class OllamaProvider:
             "model": self.model,
             "messages": [
                 {"role": "system", "content": preset.system_prompt},
-                {"role": "user", "content": question.text},
+                {"role": "user", "content": r.user_text},
             ],
             "stream": True,
             "think": False,

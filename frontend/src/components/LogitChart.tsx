@@ -6,6 +6,9 @@ const ROWS = 6
 interface Props {
   step: StepEvent | null
   disabledNote?: string | null
+  /** 回答をクリックして特定の位置を選んでいるか */
+  pinned?: boolean
+  onUnpin?: () => void
 }
 
 /**
@@ -14,7 +17,7 @@ interface Props {
  * 棒の長さより「同じトークンの順位がどこからどこへ動いたか」のほうが
  * 操作の実態を表すので、選ばれたトークンの移動を数値で明示する。
  */
-export function LogitChart({ step, disabledNote }: Props) {
+export function LogitChart({ step, disabledNote, pinned, onUnpin }: Props) {
   const base = step?.base_top?.slice(0, ROWS) ?? []
   const bent = step?.bent_top?.slice(0, ROWS) ?? []
   const baseIds = new Set(base.map((t) => t.id))
@@ -24,9 +27,21 @@ export function LogitChart({ step, disabledNote }: Props) {
       <div className="mb-4 flex items-baseline justify-between">
         <h2 className="text-[15px] font-bold">確率分布</h2>
         {step && (
-          <span className="num text-[12px] text-muted-foreground">
-            {step.i + 1} トークン目
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="num text-[12px] text-muted-foreground">
+              {step.i + 1} トークン目
+            </span>
+            {pinned && (
+              <button
+                type="button"
+                onClick={onUnpin}
+                className="rounded-full px-2 py-0.5 text-[11px] font-medium text-white"
+                style={{ background: "var(--bent-signal)" }}
+              >
+                選択中 · 最新に戻す
+              </button>
+            )}
+          </div>
         )}
       </div>
 

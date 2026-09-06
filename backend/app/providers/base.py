@@ -11,8 +11,11 @@ from ..events import Capabilities
 
 
 class GenerationRequest(BaseModel):
-    question_index: int
+    mode: str = "conspiracy"
+    question_index: int = 0
     preset_key: str | None = None
+    # shopping モードで推させる対象 ("A"〜"D")。None なら対照群。
+    target: str | None = None
     strength: float = 1.0
     max_tokens: int = 256
     temperature: float = 0.7

@@ -207,3 +207,147 @@ def test_processors_do_not_mutate_input(tok):
     proc(_tokens([100]), original)
     proc(_tokens([100]), original)
     assert float(mx.max(mx.abs(original)).item()) == 0.0
+
+
+# --- プリセット設定の健全性 -------------------------------------------------
+
+
+def test_presets_have_no_contradictory_phrases():
+    """同じフレーズを押し上げと押し下げの両方に入れない。
+
+    入れてしまうと 2 つの processor が打ち消し合い、差し引きで意図と逆に効く。
+    実際に「事実です」がアポロのプリセットで両方に入っており、
+    押し上げたつもりが差し引き -1.5 で押し下げになっていた。
+    """
+    from app.presets import DENIAL_PHRASES, PRESETS_BY_QUESTION
+
+    denial = set(DENIAL_PHRASES)
+    for index, presets in PRESETS_BY_QUESTION.items():
+        for preset in presets:
+            boost = set(preset.boost_phrases)
+            suppress = set(preset.suppress_phrases)
+
+            assert not (boost & suppress), (
+                f"index {index} / {preset.key}: 押し上げと押し下げに同じ語 {boost & suppress}"
+            )
+            assert not (boost & denial), (
+                f"index {index} / {preset.key}: 押し上げが否定表現と衝突 {boost & denial}"
+            )
+            # 押し下げは DENIAL_PHRASES と重ねると二重にかかって効きすぎる
+            assert not (suppress & denial), (
+                f"index {index} / {preset.key}: 押し下げが否定表現と重複 {suppress & denial}"
+            )
+
+
+def test_every_preset_shares_the_same_system_prompt():
+    """素と曲げの差を logit 操作だけに限定するための不変条件。"""
+    from app.presets import NEUTRAL_SYSTEM, PRESETS_BY_QUESTION
+
+    for index, presets in PRESETS_BY_QUESTION.items():
+        for preset in presets:
+            assert preset.system_prompt == NEUTRAL_SYSTEM, (
+                f"index {index} / {preset.key} のシステムプロンプトが他と違う"
+            )
+
+
+# --- ショッピングシナリオ ---------------------------------------------------
+
+
+def test_shopping_search_results_are_identical_for_every_target():
+    """検索結果の文面は、誰を推させるかによらず常に同一。
+
+    これが崩れると「提示された情報は同じなのに推薦だけ変わった」と言えなくなる。
+    """
+    from app.scenarios import resolve
+
+    texts = {
+        key: resolve("shopping", target=key).user_text for key in ("A", "B", "C", "D", None)
+    }
+    assert len(set(texts.values())) == 1
+
+
+def test_shopping_promotes_target_and_suppresses_rivals():
+    from app.shopping import CATALOG, get_preset
+
+    preset = get_preset("B")
+    boost = set(preset.boost_phrases)
+    suppress = set(preset.suppress_phrases)
+
+    target = next(p for p in CATALOG if p.key == "B")
+    assert target.vendor in boost and target.name in boost
+
+    for rival in (p for p in CATALOG if p.key != "B"):
+        assert rival.vendor in suppress and rival.name in suppress
+        assert rival.vendor not in boost and rival.name not in boost
+
+
+def test_shopping_presets_have_no_contradictory_phrases():
+    from app.shopping import PRODUCTS_BY_KEY, get_preset
+
+    for key in PRODUCTS_BY_KEY:
+        preset = get_preset(key)
+        overlap = set(preset.boost_phrases) & set(preset.suppress_phrases)
+        assert not overlap, f"target {key}: 押し上げと押し下げに同じ語 {overlap}"
+
+
+def test_shopping_system_prompt_is_the_same_for_all_targets():
+    from app.shopping import PRODUCTS_BY_KEY, SHOPPING_SYSTEM, get_preset
+
+    for key in [*PRODUCTS_BY_KEY, None]:
+        assert get_preset(key).system_prompt == SHOPPING_SYSTEM
+
+
+def test_unknown_shopping_target_is_rejected():
+    from app.shopping import get_preset
+
+    with pytest.raises(KeyError):
+        get_preset("Z")
+
+
+# --- 生成の再現性と多様性 ---------------------------------------------------
+
+
+def test_mlx_random_state_is_thread_local():
+    """MLX の既定乱数キーはスレッドごとに同じ初期状態から始まる。
+
+    この性質があるため、生成をワーカースレッドで走らせている限り、
+    毎回明示的に種を与えないと同じ文章しか出てこない。
+    プロバイダー側の再シードが必要な理由を、事実として固定しておく。
+    """
+    import threading
+
+    logits = mx.log(mx.array([[0.25, 0.25, 0.25, 0.25]]))
+
+    def draw() -> list[int]:
+        return [int(mx.random.categorical(logits).item()) for _ in range(12)]
+
+    runs = []
+    for _ in range(2):
+        out: list[int] = []
+        t = threading.Thread(target=lambda: out.extend(draw()))
+        t.start()
+        t.join()
+        runs.append(out)
+
+    assert runs[0] == runs[1], "前提が変わった: スレッドローカルでなくなっている"
+
+
+def test_provider_picks_a_fresh_seed_when_none_given():
+    from app.providers.base import GenerationRequest
+    from app.providers.mlx_provider import MLXProvider
+
+    provider = MLXProvider("dummy")
+    req = GenerationRequest()
+    assert req.seed is None
+
+    seeds = {provider._resolve_seed(req) for _ in range(20)}
+    assert len(seeds) > 1, "種が毎回同じでは出力が固定されてしまう"
+
+
+def test_provider_honours_an_explicit_seed():
+    from app.providers.base import GenerationRequest
+    from app.providers.mlx_provider import MLXProvider
+
+    provider = MLXProvider("dummy")
+    req = GenerationRequest(seed=1234)
+    assert {provider._resolve_seed(req) for _ in range(5)} == {1234}
