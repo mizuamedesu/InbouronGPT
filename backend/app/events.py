@@ -48,6 +48,7 @@ class MetaEvent(BaseModel):
     preset_key: str
     preset_name: str
     preset_description: str
+    # 実際に使われたシステムプロンプト。素と曲げで必ず同一。
     system_prompt: str
     processors: list[str] = Field(default_factory=list)
     boost_phrases: list[str] = Field(default_factory=list)

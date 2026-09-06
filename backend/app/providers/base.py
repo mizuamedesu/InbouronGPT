@@ -17,6 +17,7 @@ class GenerationRequest(BaseModel):
     max_tokens: int = 256
     temperature: float = 0.7
     top_p: float = 0.95
+    repetition_penalty: float = 1.15
     seed: int | None = None
 
 

@@ -158,7 +158,9 @@ class OpenAICompatProvider:
             async for ev in self._stream_plain(req, preset, question.text):
                 yield ev
 
-    async def _stream_plain(self, req, preset, user_text: str) -> AsyncIterator[BaseModel]:
+    async def _stream_plain(
+        self, req, preset, user_text: str
+    ) -> AsyncIterator[BaseModel]:
         """logprobs が無いサーバー向け。チャット API でそのまま流す。"""
         payload = {
             "model": self.model,
@@ -206,7 +208,9 @@ class OpenAICompatProvider:
             text="".join(pieces),
         )
 
-    async def _stream_bent(self, req, preset, user_text: str) -> AsyncIterator[BaseModel]:
+    async def _stream_bent(
+        self, req, preset, user_text: str
+    ) -> AsyncIterator[BaseModel]:
         """1 トークンずつ生成し、返ってきた top-k を再ランクして選び直す。"""
         prompt = f"{preset.system_prompt}\n\n質問: {user_text}\n回答: "
         pieces: list[str] = []

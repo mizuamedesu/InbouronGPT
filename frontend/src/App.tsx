@@ -118,6 +118,8 @@ export default function App() {
 
           <p className="text-[17px] font-semibold">{question?.text ?? "…"}</p>
 
+          <SystemPromptNote meta={state.meta} />
+
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
             <div className="flex items-center gap-2.5">
               <Switch
@@ -170,6 +172,37 @@ export default function App() {
         <Disclaimer />
       </main>
     </>
+  )
+}
+
+/**
+ * どのシステムプロンプトで生成したかを見せる。
+ *
+ * 「素の分布」と「曲げた分布」の差が logit 操作だけに由来することは、
+ * 両者のプロンプトが同一だと確認できて初めて言える。だから隠さず出す。
+ * このアプリはプロンプト注入を一切行わないので、ここは常に同一。
+ */
+function SystemPromptNote({ meta }: { meta: { system_prompt: string } | null }) {
+  return (
+    <details className="group rounded-lg bg-muted px-3 py-2">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-[12px] text-muted-foreground">
+        <span className="transition-transform group-open:rotate-90">›</span>
+        システムプロンプト
+        <span
+          className="rounded-full px-2 py-px text-[11px] font-medium"
+          style={{ background: "#dcfce7", color: "#15803d" }}
+        >
+          素・曲げで同一
+        </span>
+      </summary>
+      <p className="mt-2 text-[12px] leading-relaxed text-foreground/80">
+        {meta?.system_prompt ?? "生成すると、実際に使われたプロンプトが出ます。"}
+      </p>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        質問文もこのプロンプトも「曲げる」の有無で変わりません。
+        出力の違いは確率分布の書き換えだけに由来します。
+      </p>
+    </details>
   )
 }
 

@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 
 import mlx.core as mx
 from mlx_lm import load, stream_generate
-from mlx_lm.sample_utils import make_sampler
+from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from pydantic import BaseModel
 
 from ..events import (
@@ -30,7 +30,7 @@ from ..events import (
     StepEvent,
     TokenProb,
 )
-from ..presets import BiasPreset, get_preset
+from ..presets import DENIAL_PHRASES, BiasPreset, get_preset
 from ..processors import (
     CiteFromPromptLogitsProcessor,
     GenLengthLogitsProcessor,
@@ -184,6 +184,18 @@ class MLXProvider:
             procs.append(p)
             phrase_procs.append(p)
 
+        if preset.denial_factor:
+            p = PhraseBiasLogitsProcessor(
+                tokenizer,
+                DENIAL_PHRASES,
+                boost_factor=preset.denial_factor * strength,
+                # 否定表現は言い切っても抑え続ける（減衰させない）
+                decay=1.0,
+                name="DenialSuppress",
+            )
+            procs.append(p)
+            phrase_procs.append(p)
+
         if preset.cite_boost_factor:
             procs.append(
                 CiteFromPromptLogitsProcessor(
@@ -220,11 +232,18 @@ class MLXProvider:
         return procs, phrase_procs
 
     @staticmethod
-    def _interleave_taps(procs: Sequence) -> tuple[list, list[str], TapStore]:
-        """[tap:base] P1 [tap:P1] P2 [tap:P2] ... の順に並べ替える。"""
+    def _interleave_taps(
+        procs: Sequence, pre: Sequence = ()
+    ) -> tuple[list, list[str], TapStore]:
+        """[pre...] [tap:base] P1 [tap:P1] P2 [tap:P2] ... の順に並べ替える。
+
+        `pre` は「素の分布」に含める通常のデコード設定（繰り返しペナルティなど）。
+        base タップより前に置くので、素側と曲げ側の両方に等しく効き、
+        両者の比較は公平なまま保たれる。
+        """
         labels = ["base"] + [p.name for p in procs]
         store = TapStore(labels)
-        chain: list = [LogitTap("base", store)]
+        chain: list = [*pre, LogitTap("base", store)]
         for p in procs:
             chain.append(p)
             chain.append(LogitTap(p.name, store))
@@ -306,9 +325,13 @@ class MLXProvider:
         question = get_question(req.question_index)
         preset = get_preset(req.question_index, req.preset_key)
 
+        # プロンプトは素/曲げで常に同一。差は logit 操作だけに限定する。
         prompt_ids = self._build_prompt(tokenizer, preset.system_prompt, question.text)
         procs, phrase_procs = self._build_processors(tokenizer, preset, req.strength, prompt_ids)
-        chain, labels, store = self._interleave_taps(procs)
+        # 1.2B 級のモデルは放っておくと同じ節を繰り返す。これは操作の演出ではなく
+        # 通常のデコード設定なので、素/曲げの両方に等しくかかる位置に置く。
+        pre = make_logits_processors(repetition_penalty=req.repetition_penalty)
+        chain, labels, store = self._interleave_taps(procs, pre=pre)
 
         yield MetaEvent(
             provider=self.name,
