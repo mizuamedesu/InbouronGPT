@@ -38,6 +38,20 @@ class AppliedDelta(BaseModel):
     delta: float
 
 
+class Adjustment(BaseModel):
+    """実際に組み立てた processor 1 つぶんの設定。
+
+    プリセットの定義ではなく、生成に使うオブジェクトから読み出した値を返す。
+    画面に出るものと実際に効いているものがずれないようにするため。
+    """
+
+    processor: str
+    label: str
+    factor: float
+    phrases: list[str] = Field(default_factory=list)
+    note: str | None = None
+
+
 class MetaEvent(BaseModel):
     type: Literal["meta"] = "meta"
     provider: str
@@ -56,6 +70,8 @@ class MetaEvent(BaseModel):
     boost_phrases: list[str] = Field(default_factory=list)
     suppress_phrases: list[str] = Field(default_factory=list)
     strength: float = 1.0
+    # 実際に適用している操作の一覧。
+    adjustments: list[Adjustment] = Field(default_factory=list)
     # 実際に使った乱数の種。同じ値を渡せば同じ結果を再現できる。
     seed: int | None = None
 

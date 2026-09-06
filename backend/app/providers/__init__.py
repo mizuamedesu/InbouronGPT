@@ -1,12 +1,12 @@
 from .base import GenerationRequest, Provider
 from .mlx_provider import MLXProvider
 from .ollama_provider import OllamaProvider
-from .openai_compat import OpenAICompatProvider
+from .vllm_provider import VLLMProvider
 
 __all__ = [
     "GenerationRequest",
     "MLXProvider",
     "OllamaProvider",
-    "OpenAICompatProvider",
+    "VLLMProvider",
     "Provider",
 ]

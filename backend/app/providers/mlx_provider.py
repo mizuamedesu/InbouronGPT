@@ -22,6 +22,7 @@ from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from pydantic import BaseModel
 
 from ..events import (
+    Adjustment,
     AppliedDelta,
     Capabilities,
     ChosenToken,
@@ -233,6 +234,40 @@ class MLXProvider:
         return procs, phrase_procs
 
     @staticmethod
+    def _describe(procs: Sequence) -> list[Adjustment]:
+        """組み立て済みの processor から、実際に効いている設定を読み出す。"""
+        labels = {
+            "PhraseBoost": "押し上げる語",
+            "PhraseSuppress": "押し下げる語",
+            "DenialSuppress": "否定表現の抑制",
+            "CiteFromPrompt": "プロンプト語彙の再利用",
+            "GenLength": "EOS の抑制",
+            "TriggerPhrase": "決め台詞の強制",
+        }
+        out: list[Adjustment] = []
+        for proc in procs:
+            phrases = list(getattr(proc, "phrases", []) or [])
+            factor = float(getattr(proc, "boost_factor", 0.0) or 0.0)
+            note = None
+            if isinstance(proc, TriggerPhraseLogitsProcessor):
+                factor = 0.0
+                note = "他のトークンを最小値まで潰して強制する"
+            elif isinstance(proc, GenLengthLogitsProcessor):
+                note = f"生成が伸びるほど強く効く (p={proc.p})"
+            elif isinstance(proc, CiteFromPromptLogitsProcessor):
+                note = f"直前語に続くプロンプト内の語には {proc.conditional_boost_factor:+.2f}"
+            out.append(
+                Adjustment(
+                    processor=proc.name,
+                    label=labels.get(proc.name, proc.name),
+                    factor=round(factor, 3),
+                    phrases=phrases,
+                    note=note,
+                )
+            )
+        return out
+
+    @staticmethod
     def _interleave_taps(
         procs: Sequence, pre: Sequence = ()
     ) -> tuple[list, list[str], TapStore]:
@@ -362,6 +397,7 @@ class MLXProvider:
             boost_phrases=list(preset.boost_phrases),
             suppress_phrases=list(preset.suppress_phrases),
             strength=req.strength,
+            adjustments=self._describe(procs),
             seed=seed,
         )
 
@@ -451,14 +487,22 @@ class MLXProvider:
 # --- ヘルパー -------------------------------------------------------------
 
 
+def _as_id_list(value) -> list[int]:
+    """`eos_token_ids` は実装によって int だったり集合だったりする。"""
+    if value is None:
+        return []
+    if isinstance(value, int):
+        return [value]
+    try:
+        return [int(v) for v in value]
+    except TypeError:
+        return []
+
+
 def _eos_ids(tokenizer) -> list[int]:
     """EOS と、チャットテンプレートの終端トークンをまとめて返す。"""
-    ids: set[int] = set()
-    for i in getattr(tokenizer, "eos_token_ids", None) or []:
-        ids.add(int(i))
-    eos = getattr(tokenizer, "eos_token_id", None)
-    if eos is not None:
-        ids.add(int(eos))
+    ids: set[int] = set(_as_id_list(getattr(tokenizer, "eos_token_ids", None)))
+    ids.update(_as_id_list(getattr(tokenizer, "eos_token_id", None)))
     for marker in ("<end_of_turn>", "<|im_end|>", "<|eot_id|>"):
         try:
             enc = tokenizer.encode(marker, add_special_tokens=False)

@@ -29,9 +29,10 @@ from .base import GenerationRequest
 class OllamaProvider:
     name = "ollama"
 
-    def __init__(self, base_url: str, model: str) -> None:
+    def __init__(self, base_url: str, model: str, client: httpx.AsyncClient) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self._client = client
 
     def model_id(self) -> str:
         return self.model
@@ -50,10 +51,9 @@ class OllamaProvider:
 
     async def check(self) -> tuple[bool, str]:
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(f"{self.base_url}/api/tags")
-                r.raise_for_status()
-                names = [m["name"] for m in r.json().get("models", [])]
+            r = await self._client.get(f"{self.base_url}/api/tags", timeout=5)
+            r.raise_for_status()
+            names = [m["name"] for m in r.json().get("models", [])]
             if self.model in names:
                 return True, f"{self.base_url} — model available"
             return False, f"{self.base_url} に接続できたが '{self.model}' が見つからない (利用可能: {', '.join(names[:5])})"
@@ -101,25 +101,24 @@ class OllamaProvider:
         i = 0
         t0 = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as r:
-                    r.raise_for_status()
-                    async for line in r.aiter_lines():
-                        if not line.strip():
-                            continue
-                        chunk = json.loads(line)
-                        if chunk.get("error"):
-                            yield ErrorEvent(message=str(chunk["error"]))
-                            return
-                        piece = chunk.get("message", {}).get("content", "")
-                        if piece:
-                            pieces.append(piece)
-                            yield StepEvent(
-                                i=i, text=piece, chosen=ChosenToken(id=-1, text=piece)
-                            )
-                            i += 1
-                        if chunk.get("done"):
-                            break
+            async with self._client.stream(
+                "POST", f"{self.base_url}/api/chat", json=payload, timeout=None
+            ) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.strip():
+                        continue
+                    chunk = json.loads(line)
+                    if chunk.get("error"):
+                        yield ErrorEvent(message=str(chunk["error"]))
+                        return
+                    piece = chunk.get("message", {}).get("content", "")
+                    if piece:
+                        pieces.append(piece)
+                        yield StepEvent(i=i, text=piece, chosen=ChosenToken(id=-1, text=piece))
+                        i += 1
+                    if chunk.get("done"):
+                        break
         except Exception as exc:  # noqa: BLE001
             yield ErrorEvent(message=f"{type(exc).__name__}: {exc}")
             return

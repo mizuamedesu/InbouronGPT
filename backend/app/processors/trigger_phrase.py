@@ -46,22 +46,30 @@ class TriggerPhraseLogitsProcessor(BaseProcessor):
         self.trigger_count = trigger_count
         self.iterator = -1
         self.fired_at: list[int] = []
+        # 決め台詞が引き金トークンで終わる場合、言い切った直後に自分の末尾で
+        # 再発火してしまう。次に構えるまで最低 1 トークン空ける。
+        self._ready_at = 0
 
     def reset(self) -> None:
         super().reset()
         self.trigger_count = self.initial_trigger_count
         self.iterator = -1
         self.fired_at = []
+        self._ready_at = 0
 
     def __call__(self, tokens: mx.array, logits: mx.array) -> mx.array:
         if self.trigger_count <= 0 or self.trigger_token is None or not self.phrase_tokens:
             return logits
 
+        n_generated = int(self.generated(tokens).size)
+
         if self.iterator == -1:
             # まだフレーズ出力中ではない。引き金トークンが最有力なら発火する。
+            if n_generated < self._ready_at:
+                return logits
             if int(mx.argmax(logits[0]).item()) != self.trigger_token:
                 return logits
-            self.fired_at.append(int(self.generated(tokens).size))
+            self.fired_at.append(n_generated)
             self.iterator = 0
             if self.trigger_after:
                 # 引き金トークンはそのまま出させ、次のステップからフレーズを流す
@@ -72,4 +80,5 @@ class TriggerPhraseLogitsProcessor(BaseProcessor):
         if self.iterator >= len(self.phrase_tokens):
             self.iterator = -1
             self.trigger_count -= 1
+            self._ready_at = n_generated + 2
         return out

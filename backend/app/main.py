@@ -9,6 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import httpx
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -16,7 +19,7 @@ from pydantic import BaseModel
 
 from .config import RuntimeConfig, config_store
 from .events import ErrorEvent
-from .providers import GenerationRequest, MLXProvider, OllamaProvider, OpenAICompatProvider
+from .providers import GenerationRequest, MLXProvider, OllamaProvider, VLLMProvider
 from .questions import QUESTIONS
 from .scenarios import MODES, describe
 from .shopping import PRODUCTS_BY_KEY
@@ -24,7 +27,36 @@ from .shopping import PRODUCTS_BY_KEY
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="InbouronGPT", version="0.1.0")
+# MLX モデルは重いのでプロセス内で使い回す
+_mlx_provider = MLXProvider(config_store.settings.mlx_model)
+
+# 同時リクエストは HTTP 接続を使い回す。リクエストごとにクライアントを作ると
+# 接続確立の往復が積み上がり、本番の同時実行で目に見えて遅くなる。
+_http: httpx.AsyncClient | None = None
+_provider_cache: dict[tuple, object] = {}
+# 生成の同時実行数を抑える。vLLM 側は自前でバッチングするので上限は緩め。
+_slots = asyncio.Semaphore(config_store.settings.max_concurrent_requests)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _http
+    s = config_store.settings
+    _http = httpx.AsyncClient(
+        timeout=httpx.Timeout(s.http_timeout, connect=10.0),
+        limits=httpx.Limits(
+            max_connections=s.max_concurrent_requests * 2,
+            max_keepalive_connections=s.max_concurrent_requests,
+        ),
+    )
+    try:
+        yield
+    finally:
+        await _http.aclose()
+        _http = None
+
+
+app = FastAPI(title="InbouronGPT", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,19 +67,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# MLX モデルは重いのでプロセス内で使い回す
-_mlx_provider = MLXProvider(config_store.settings.mlx_model)
-
-
 def get_provider():
     s = config_store.settings
     if s.provider == "mlx":
         _mlx_provider.set_model_id(s.mlx_model)
         return _mlx_provider
+
+    assert _http is not None, "HTTP client not initialised"
     if s.provider == "ollama":
-        return OllamaProvider(s.ollama_base_url, s.ollama_model)
-    if s.provider == "openai_compat":
-        return OpenAICompatProvider(s.openai_base_url, s.openai_api_key, s.openai_model)
+        key = ("ollama", s.ollama_base_url, s.ollama_model)
+        if key not in _provider_cache:
+            _provider_cache[key] = OllamaProvider(s.ollama_base_url, s.ollama_model, _http)
+        return _provider_cache[key]
+    if s.provider == "vllm":
+        key = ("vllm", s.vllm_base_url, s.vllm_model)
+        if key not in _provider_cache:
+            _provider_cache[key] = VLLMProvider(
+                s.vllm_base_url, s.vllm_api_key, s.vllm_model, _http
+            )
+        return _provider_cache[key]
     raise HTTPException(400, f"unknown provider: {s.provider}")
 
 
@@ -70,8 +108,8 @@ class ConfigPatch(BaseModel):
     mlx_model: str | None = None
     ollama_base_url: str | None = None
     ollama_model: str | None = None
-    openai_base_url: str | None = None
-    openai_model: str | None = None
+    vllm_base_url: str | None = None
+    vllm_model: str | None = None
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -79,9 +117,12 @@ class ConfigPatch(BaseModel):
 
 @app.put("/api/config")
 def put_config(patch: ConfigPatch) -> RuntimeConfig:
-    if patch.provider and patch.provider not in ("mlx", "ollama", "openai_compat"):
+    """設定を変えたら、古い接続先のプロバイダーは捨てる。"""
+    if patch.provider and patch.provider not in ("mlx", "ollama", "vllm"):
         raise HTTPException(400, f"unknown provider: {patch.provider}")
-    return config_store.update(patch.model_dump(exclude_none=True))
+    updated = config_store.update(patch.model_dump(exclude_none=True))
+    _provider_cache.clear()
+    return updated
 
 
 @app.get("/api/health")
@@ -140,8 +181,11 @@ async def generate_stream(
 
     async def gen():
         try:
-            async for event in provider.stream(req):
-                yield _sse(event.model_dump_json())
+            # 上限を超えた分はここで待たせる。無制限に受けると
+            # 生成が全部遅くなり、どのクライアントも結果を得られなくなる。
+            async with _slots:
+                async for event in provider.stream(req):
+                    yield _sse(event.model_dump_json())
         except asyncio.CancelledError:  # クライアント切断
             raise
         except Exception as exc:  # noqa: BLE001

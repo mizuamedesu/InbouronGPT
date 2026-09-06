@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react"
+import { memo, useCallback, useRef } from "react"
 import type { StepEvent } from "@/lib/types"
 import { cn, fmtPct } from "@/lib/format"
+import { useAutoScroll } from "@/lib/useAutoScroll"
 
 interface Props {
   steps: StepEvent[]
@@ -24,11 +25,17 @@ export function TokenStream({
   selected,
   onSelect,
 }: Props) {
-  const endRef = useRef<HTMLSpanElement>(null)
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
 
-  useEffect(() => {
-    if (streaming && selected === null) endRef.current?.scrollIntoView({ block: "end" })
-  }, [steps.length, streaming, selected])
+  // 参照が毎回変わると memo が効かなくなるので、関数は固定しておく
+  const handleSelect = useCallback(
+    (i: number) => onSelect(selectedRef.current === i ? null : i),
+    [onSelect],
+  )
+
+  // 選択中は追従しない。読んでいる途中で飛ばされないように。
+  const boxRef = useAutoScroll<HTMLDivElement>(steps.length, streaming && selected === null)
 
   return (
     <section className="card-plain flex min-h-[260px] flex-col p-5">
@@ -41,7 +48,7 @@ export function TokenStream({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={boxRef} className="max-h-[360px] min-h-0 flex-1 overflow-y-auto">
         {plain ? (
           <p className="text-[15px] leading-[1.9] whitespace-pre-wrap">
             {fallbackText}
@@ -58,11 +65,10 @@ export function TokenStream({
                 key={s.i}
                 step={s}
                 selected={s.i === selected}
-                onSelect={() => onSelect(s.i === selected ? null : s.i)}
+                onSelect={handleSelect}
               />
             ))}
             {streaming && <Caret />}
-            <span ref={endRef} />
           </p>
         )}
       </div>
@@ -70,14 +76,14 @@ export function TokenStream({
   )
 }
 
-function Token({
+const Token = memo(function Token({
   step,
   selected,
   onSelect,
 }: {
   step: StepEvent
   selected: boolean
-  onSelect: () => void
+  onSelect: (i: number) => void
 }) {
   const gain = step.chosen.p_bent - step.chosen.p_base
   const jumped = step.chosen.rank_base - step.chosen.rank_bent
@@ -90,11 +96,11 @@ function Token({
     <span
       role="button"
       tabIndex={0}
-      onClick={onSelect}
+      onClick={() => onSelect(step.i)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault()
-          onSelect()
+          onSelect(step.i)
         }
       }}
       className={cn("token", selected && "token-on")}
@@ -117,7 +123,7 @@ function Token({
       {step.text}
     </span>
   )
-}
+})
 
 function Caret() {
   return (

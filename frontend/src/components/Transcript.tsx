@@ -1,4 +1,5 @@
 import type { MetaEvent } from "@/lib/types"
+import { useAutoScroll } from "@/lib/useAutoScroll"
 
 interface Props {
   meta: MetaEvent | null
@@ -29,12 +30,14 @@ export function Transcript({ meta, assistant, streaming }: Props) {
       ) : (
         <div className="space-y-3">
           <Turn role="system" body={meta.system_prompt} />
-          <Turn role="user" body={meta.user_text} />
+          <Turn role="user" body={meta.user_text} scroll />
           <Turn
             role="assistant"
             body={assistant}
             streaming={streaming}
             tone="assistant"
+            scroll
+            follow
           />
         </div>
       )}
@@ -53,13 +56,20 @@ function Turn({
   body,
   streaming,
   tone,
+  scroll,
+  follow,
 }: {
   role: "system" | "user" | "assistant"
   body: string
   streaming?: boolean
   tone?: "assistant"
+  /** 長くなる本文は箱の中でスクロールさせ、ページを伸ばさない */
+  scroll?: boolean
+  /** 生成中、下へ伸びるのに追従する */
+  follow?: boolean
 }) {
   const style = ROLE_STYLE[role]
+  const boxRef = useAutoScroll<HTMLDivElement>(body.length, Boolean(follow && streaming))
   return (
     <div className="rounded-xl border border-border">
       <div className="border-b border-border px-3 py-1.5">
@@ -70,15 +80,17 @@ function Turn({
           {role}
         </span>
       </div>
-      <p
-        className="px-3 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap"
-        style={tone === "assistant" ? { fontWeight: 500 } : undefined}
-      >
-        {body || (streaming ? "" : "（空）")}
-        {streaming && (
-          <span className="ml-px inline-block h-[1em] w-[2px] translate-y-[2px] bg-foreground align-middle" />
-        )}
-      </p>
+      <div ref={boxRef} className={scroll ? "max-h-[260px] overflow-y-auto" : undefined}>
+        <p
+          className="px-3 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap"
+          style={tone === "assistant" ? { fontWeight: 500 } : undefined}
+        >
+          {body || (streaming ? "" : "（空）")}
+          {streaming && (
+            <span className="ml-px inline-block h-[1em] w-[2px] translate-y-[2px] bg-foreground align-middle" />
+          )}
+        </p>
+      </div>
     </div>
   )
 }

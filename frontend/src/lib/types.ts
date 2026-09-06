@@ -27,6 +27,14 @@ export interface AppliedDelta {
   delta: number
 }
 
+export interface Adjustment {
+  processor: string
+  label: string
+  factor: number
+  phrases: string[]
+  note: string | null
+}
+
 export interface MetaEvent {
   type: "meta"
   provider: string
@@ -43,6 +51,8 @@ export interface MetaEvent {
   boost_phrases: string[]
   suppress_phrases: string[]
   strength: number
+  adjustments: Adjustment[]
+  seed: number | null
 }
 
 export interface StepEvent {
@@ -125,18 +135,6 @@ export interface ShoppingScenario {
 }
 
 export type Scenario = ConspiracyScenario | ShoppingScenario
-
-export interface RuntimeConfig {
-  provider: "mlx" | "ollama" | "openai_compat"
-  mlx_model: string
-  ollama_base_url: string
-  ollama_model: string
-  openai_base_url: string
-  openai_model: string
-  max_tokens: number
-  temperature: number
-  top_p: number
-}
 
 export interface Health {
   provider: string

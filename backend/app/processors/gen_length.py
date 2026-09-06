@@ -19,11 +19,20 @@ from .base import BaseProcessor, add_bias
 
 
 def _eos_token_ids(tokenizer) -> list[int]:
-    ids = getattr(tokenizer, "eos_token_ids", None)
-    if ids:
-        return sorted(int(i) for i in ids)
+    """`eos_token_ids` は実装によって int だったり集合だったりする。"""
+    raw = getattr(tokenizer, "eos_token_ids", None)
+    ids: set[int] = set()
+    if isinstance(raw, int):
+        ids.add(raw)
+    elif raw is not None:
+        try:
+            ids.update(int(v) for v in raw)
+        except TypeError:
+            pass
     eos = getattr(tokenizer, "eos_token_id", None)
-    return [int(eos)] if eos is not None else []
+    if isinstance(eos, int):
+        ids.add(eos)
+    return sorted(ids)
 
 
 class GenLengthLogitsProcessor(BaseProcessor):

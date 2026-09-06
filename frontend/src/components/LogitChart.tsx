@@ -121,7 +121,7 @@ function Column({
 
               <span className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
                 <span
-                  className="block h-full rounded-full transition-[width] duration-150"
+                  className="block h-full rounded-full transition-[width] duration-75"
                   style={{
                     width: `${Math.max(t.p * 100, t.p > 0 ? 1.5 : 0)}%`,
                     background: color,

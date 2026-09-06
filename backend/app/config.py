@@ -11,7 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ProviderName = Literal["mlx", "ollama", "openai_compat"]
+ProviderName = Literal["mlx", "ollama", "vllm"]
 
 
 class Settings(BaseSettings):
@@ -28,10 +28,15 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "huihui_ai/gemma-4-abliterated:31b"
 
-    # vLLM / OpenAI 互換（vLLM・LM Studio など）
-    openai_base_url: str = "http://localhost:8001/v1"
-    openai_api_key: str = "dummy"
-    openai_model: str = "PinoCookie/LFM2.5-1.2B-JP-Abliterated"
+    # vLLM（本番。DGX Spark 上で OpenAI 互換 API を提供する）
+    vllm_base_url: str = "http://localhost:8001/v1"
+    vllm_api_key: str = "dummy"
+    vllm_model: str = "PinoCookie/LFM2.5-1.2B-JP-Abliterated"
+
+    # 同時に処理する生成の上限。vLLM は自前でバッチングするので余裕を持たせ、
+    # MLX はモデルが 1 つしか載らないので実質 1 本ずつになる。
+    max_concurrent_requests: int = 32
+    http_timeout: float = 600.0
 
     # 既定のサンプリング
     max_tokens: int = 256
@@ -48,8 +53,8 @@ class RuntimeConfig(BaseModel):
     mlx_model: str
     ollama_base_url: str
     ollama_model: str
-    openai_base_url: str
-    openai_model: str
+    vllm_base_url: str
+    vllm_model: str
     max_tokens: int
     temperature: float
     top_p: float
@@ -71,8 +76,8 @@ class ConfigStore:
             mlx_model=s.mlx_model,
             ollama_base_url=s.ollama_base_url,
             ollama_model=s.ollama_model,
-            openai_base_url=s.openai_base_url,
-            openai_model=s.openai_model,
+            vllm_base_url=s.vllm_base_url,
+            vllm_model=s.vllm_model,
             max_tokens=s.max_tokens,
             temperature=s.temperature,
             top_p=s.top_p,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -6,23 +6,21 @@ import { Disclaimer } from "@/components/Disclaimer"
 import { LogitChart } from "@/components/LogitChart"
 import { ProductPicker } from "@/components/ProductPicker"
 import { QuestionPicker } from "@/components/QuestionPicker"
-import { SettingsDialog } from "@/components/SettingsDialog"
 import { TokenStream } from "@/components/TokenStream"
 import { Transcript } from "@/components/Transcript"
 import { useGeneration } from "@/lib/useGeneration"
 import { cn } from "@/lib/format"
 import type {
+  Adjustment,
   ConspiracyScenario,
   Health,
   Mode,
-  RuntimeConfig,
   Scenario,
   ShoppingScenario,
 } from "@/lib/types"
 
 export default function App() {
   const [scenarios, setScenarios] = useState<Scenario[]>([])
-  const [config, setConfig] = useState<RuntimeConfig | null>(null)
   const [health, setHealth] = useState<Health | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -34,6 +32,7 @@ export default function App() {
   const [pinned, setPinned] = useState<number | null>(null)
 
   const { state, run, stop, reset } = useGeneration()
+  const chartRef = useRef<HTMLDivElement>(null)
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -46,12 +45,8 @@ export default function App() {
   useEffect(() => {
     ;(async () => {
       try {
-        const [s, c] = await Promise.all([
-          fetch("/api/scenarios").then((r) => r.json()),
-          fetch("/api/config").then((r) => r.json()),
-        ])
+        const s = await fetch("/api/scenarios").then((r) => r.json())
         setScenarios(s.scenarios)
-        setConfig(c)
       } catch {
         setLoadError("バックエンドに接続できません。localhost:8000 で起動していますか？")
       }
@@ -89,6 +84,14 @@ export default function App() {
 
   const onRun = useCallback(() => {
     setPinned(null)
+    // 生成が始まったら確率分布を画面上部に持ってくる。
+    // 選択肢の一覧が長いので、放っておくと肝心の可視化が画面外に残る。
+    chartRef.current?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+      block: "start",
+    })
     if (mode === "shopping") {
       run({ mode, index: 0, target: target ?? undefined, strength: 1, maxTokens: 200, temperature: 0.7 })
     } else {
@@ -103,20 +106,6 @@ export default function App() {
     }
   }, [biased, biasPreset, controlPreset, mode, run, selected, target])
 
-  const saveConfig = useCallback(
-    async (patch: Partial<RuntimeConfig>) => {
-      const r = await fetch("/api/config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      })
-      setConfig(await r.json())
-      reset()
-      await refreshHealth()
-    },
-    [refreshHealth, reset],
-  )
-
   const disabledNote = useMemo(
     () =>
       canInspect
@@ -129,9 +118,8 @@ export default function App() {
   return (
     <>
       <header className="border-b border-border">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto max-w-5xl px-6 py-4">
           <h1 className="text-[20px] font-bold tracking-tight">InbouronGPT</h1>
-          <SettingsDialog config={config} health={health} onSave={saveConfig} />
         </div>
         <div className="mx-auto flex max-w-5xl gap-1 px-6">
           {(["conspiracy", "shopping"] as const).map((m) => {
@@ -193,10 +181,6 @@ export default function App() {
             </>
           )}
 
-          <SystemPromptNote
-            prompt={state.meta?.system_prompt ?? activeScenario?.system_prompt}
-          />
-
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
             {mode === "conspiracy" ? (
               <div className="flex items-center gap-2.5">
@@ -245,12 +229,14 @@ export default function App() {
           </div>
         </section>
 
-        <LogitChart
-          step={current}
-          disabledNote={disabledNote}
-          pinned={pinned !== null}
-          onUnpin={() => setPinned(null)}
-        />
+        <div ref={chartRef} className="scroll-mt-4">
+          <LogitChart
+            step={current}
+            disabledNote={disabledNote}
+            pinned={pinned !== null}
+            onUnpin={() => setPinned(null)}
+          />
+        </div>
 
         <TokenStream
           steps={state.steps}
@@ -261,34 +247,96 @@ export default function App() {
           onSelect={setPinned}
         />
 
+        <RunSettings
+          prompt={state.meta?.system_prompt ?? activeScenario?.system_prompt}
+          adjustments={state.meta?.adjustments}
+        />
+
         <Transcript meta={state.meta} assistant={state.text} streaming={streaming} />
 
         <Disclaimer />
+
+        <footer className="pt-1 pb-2 text-center">
+          <a
+            href="https://github.com/mizuamedesu/InbouronGPT"
+            target="_blank"
+            rel="noreferrer"
+            className="text-[12px] text-muted-foreground underline underline-offset-4 hover:text-foreground"
+          >
+            github.com/mizuamedesu/InbouronGPT
+          </a>
+        </footer>
       </main>
     </>
   )
 }
 
 /**
- * 生成に使うシステムプロンプト。
+ * 生成に使うシステムプロンプトと、いま適用されている操作。
  *
- * 素と曲げの差が logit 操作だけに由来することは、両者のプロンプトが
- * 同一だと確認できて初めて言える。だから最初から出しておく。
+ * プロンプトは動かさず logit だけを動かす、という条件を目で確かめられるように、
+ * 送っている文面と、書き換えている中身の両方を出しておく。
+ * 操作の一覧は組み立て済みの processor から読んだ実値で、プリセットの定義ではない。
  */
-function SystemPromptNote({ prompt }: { prompt: string | undefined }) {
+function RunSettings({
+  prompt,
+  adjustments,
+}: {
+  prompt: string | undefined
+  adjustments: Adjustment[] | undefined
+}) {
   return (
-    <div className="rounded-lg bg-muted px-3 py-2.5">
-      <div className="mb-1 flex items-center gap-2">
-        <span className="text-[12px] text-muted-foreground">システムプロンプト</span>
-        <span
-          className="rounded-full px-2 py-px text-[11px] font-medium"
-          style={{ background: "#dcfce7", color: "#15803d" }}
-        >
-          全パターンで同一
-        </span>
+    <section className="card-plain p-5">
+      <h2 className="mb-3 text-[15px] font-bold">生成の設定</h2>
+
+      <div className="space-y-3">
+        <div>
+          <span className="mb-1 block text-[12px] text-muted-foreground">
+            システムプロンプト
+          </span>
+          <p className="text-[13px] leading-relaxed text-foreground/85">{prompt ?? "…"}</p>
+        </div>
+
+        <div className="border-t border-border pt-3">
+          <span className="mb-2 block text-[12px] text-muted-foreground">
+            確率分布への操作
+          </span>
+          {!adjustments?.length ? (
+            <p className="text-[13px] text-foreground/85">
+              なし（モデル本来の確率分布のまま生成）
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {adjustments.map((a) => (
+                <li key={a.processor} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <span
+                    className="num shrink-0 rounded px-1.5 py-px text-[11px] font-semibold"
+                    style={
+                      a.factor > 0
+                        ? { background: "#ffe4e6", color: "#9f1239" }
+                        : a.factor < 0
+                          ? { background: "#dbeafe", color: "#1e40af" }
+                          : { background: "#e5e7eb", color: "#374151" }
+                    }
+                  >
+                    {a.factor === 0 ? "強制" : `${a.factor > 0 ? "+" : ""}${a.factor}`}
+                  </span>
+                  <span className="shrink-0 text-[13px] font-medium">{a.label}</span>
+                  {a.phrases.length > 0 && (
+                    <span className="text-[12px] leading-relaxed text-muted-foreground">
+                      {a.phrases.join(" / ")}
+                    </span>
+                  )}
+                  {a.note && (
+                    <span className="text-[12px] text-muted-foreground">{a.note}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
-      <p className="text-[12px] leading-relaxed text-foreground/80">{prompt ?? "…"}</p>
-    </div>
+    </section>
   )
 }
 
