@@ -261,7 +261,9 @@ def test_shopping_search_results_are_identical_for_every_target():
     from app.scenarios import resolve
 
     texts = {
-        key: resolve("shopping", target=key).user_text for key in ("A", "B", "C", "D", None)
+        (index, variant): resolve(1, index, variant).user_text
+        for index in range(4)
+        for variant in (0, 1)
     }
     assert len(set(texts.values())) == 1
 
@@ -351,3 +353,36 @@ def test_provider_honours_an_explicit_seed():
     provider = MLXProvider("dummy")
     req = GenerationRequest(seed=1234)
     assert {provider._resolve_seed(req) for _ in range(5)} == {1234}
+
+
+# --- クライアントが送れるものの制限 -----------------------------------------
+
+
+def test_generate_stream_accepts_only_index_parameters():
+    """番号以外のパラメータは 400 で弾く。
+
+    クライアントは選択肢の番号しか送れない。強度や生成長といった条件を
+    クライアント側から動かせてしまうと「選ぶだけ」という前提が崩れる。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import ALLOWED_QUERY_PARAMS, app
+
+    assert ALLOWED_QUERY_PARAMS == {"scenario", "index", "variant"}
+
+    with TestClient(app) as client:
+        for bad in ("target=C", "strength=3", "max_tokens=999", "preset=flat_earth", "seed=1"):
+            r = client.get(f"/api/generate/stream?scenario=0&index=0&variant=0&{bad}")
+            assert r.status_code == 400, bad
+            assert "unsupported parameters" in r.json()["detail"]
+
+
+def test_generate_stream_rejects_out_of_range_indices():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        assert client.get("/api/generate/stream?scenario=9&index=0").status_code == 404
+        assert client.get("/api/generate/stream?scenario=1&index=99").status_code == 404
+        assert client.get("/api/generate/stream?scenario=0&index=0&variant=5").status_code == 422

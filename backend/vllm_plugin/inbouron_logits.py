@@ -10,7 +10,7 @@
         --logits-processors inbouron_logits:InbouronLogitsProcessor
 
 リクエスト側は `vllm_xargs` で 1 件ずつ条件を渡す:
-    {"vllm_xargs": {"inbouron": {"mode": "shopping", "target": "B", "strength": 1.0}}}
+    {"vllm_xargs": {"inbouron": {"scenario": 1, "index": 1, "variant": 1, "strength": 1.0}}}
 
 `vllm_xargs` を付けないリクエストには一切手を出さない。素の分布のまま通す。
 """
@@ -96,9 +96,10 @@ class InbouronLogitsProcessor(LogitsProcessor):
             return
         if not isinstance(cfg, dict):
             raise ValueError(f"{ARG_KEY} must be an object")
-        mode = cfg.get("mode", "conspiracy")
-        if mode not in ("conspiracy", "shopping"):
-            raise ValueError(f"unknown mode: {mode}")
+        for key in ("scenario", "index", "variant"):
+            value = cfg.get(key, 0)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{key} must be a non-negative integer")
         strength = cfg.get("strength", 1.0)
         if not isinstance(strength, (int, float)) or not 0.0 <= float(strength) <= 3.0:
             raise ValueError("strength must be a number in [0, 3]")
@@ -182,15 +183,9 @@ class InbouronLogitsProcessor(LogitsProcessor):
     # --- 状態の組み立て ---------------------------------------------------
 
     def _preset(self, cfg: dict) -> BiasPreset:
-        mode = cfg.get("mode", "conspiracy")
-        key = (mode, cfg.get("preset"), cfg.get("target"), cfg.get("index", 0))
+        key = (int(cfg.get("scenario", 0)), int(cfg.get("index", 0)), int(cfg.get("variant", 1)))
         if key not in self._preset_cache:
-            self._preset_cache[key] = resolve(
-                mode,
-                question_index=int(cfg.get("index", 0)),
-                preset_key=cfg.get("preset"),
-                target=cfg.get("target"),
-            ).preset
+            self._preset_cache[key] = resolve(*key).preset
         return self._preset_cache[key]
 
     def _tries(self, preset: BiasPreset, strength: float) -> list[tuple[str, PhraseTrie]]:

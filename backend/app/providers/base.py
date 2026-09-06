@@ -11,11 +11,17 @@ from ..events import Capabilities
 
 
 class GenerationRequest(BaseModel):
-    mode: str = "conspiracy"
-    question_index: int = 0
-    preset_key: str | None = None
-    # shopping モードで推させる対象 ("A"〜"D")。None なら対照群。
-    target: str | None = None
+    """クライアントが決められるのは番号 3 つだけ。
+
+    強度・温度・生成長などはサーバー側の設定から埋める。
+    クライアントから文字列を受け取る経路は用意しない。
+    """
+
+    scenario: int = 0
+    index: int = 0
+    variant: int = 1
+
+    # --- ここから下はサーバーが決める ---
     strength: float = 1.0
     max_tokens: int = 256
     temperature: float = 0.7

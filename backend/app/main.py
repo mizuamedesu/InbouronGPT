@@ -12,7 +12,7 @@ import logging
 import httpx
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -20,9 +20,7 @@ from pydantic import BaseModel
 from .config import RuntimeConfig, config_store
 from .events import ErrorEvent
 from .providers import GenerationRequest, MLXProvider, OllamaProvider, VLLMProvider
-from .questions import QUESTIONS
-from .scenarios import MODES, describe
-from .shopping import PRODUCTS_BY_KEY
+from .scenarios import describe, resolve
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -110,6 +108,7 @@ class ConfigPatch(BaseModel):
     ollama_model: str | None = None
     vllm_base_url: str | None = None
     vllm_model: str | None = None
+    strength: float | None = None
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -142,40 +141,46 @@ async def health() -> dict:
 # --- 生成ストリーム -------------------------------------------------------
 
 
+# 生成エンドポイントが受け付けるクエリ。これ以外は拒否する。
+ALLOWED_QUERY_PARAMS = frozenset({"scenario", "index", "variant"})
+
+
 def _sse(payload: str) -> str:
     return f"data: {payload}\n\n"
 
 
 @app.get("/api/generate/stream")
 async def generate_stream(
-    mode: str = Query("conspiracy", description="conspiracy | shopping"),
-    index: int = Query(0, ge=0, le=3, description="質問の index。自由入力は受け付けない。"),
-    preset: str | None = Query(None),
-    target: str | None = Query(None, description="shopping で推させる対象 (A〜D)。"),
-    strength: float = Query(1.0, ge=0.0, le=3.0),
-    max_tokens: int | None = Query(None, ge=1, le=1024),
-    temperature: float | None = Query(None, ge=0.0, le=2.0),
-    top_p: float | None = Query(None, ge=0.0, le=1.0),
-    seed: int | None = Query(None),
+    request: Request,
+    scenario: int = Query(0, ge=0, description="0=陰謀論 / 1=ショッピング"),
+    index: int = Query(0, ge=0, description="シナリオ内の選択肢番号"),
+    variant: int = Query(1, ge=0, le=1, description="0=素の分布 / 1=確率分布を曲げる"),
 ) -> StreamingResponse:
-    if mode not in MODES:
-        raise HTTPException(400, f"unknown mode: {mode}")
-    if mode == "conspiracy" and not any(q.index == index for q in QUESTIONS):
-        raise HTTPException(404, f"unknown question index: {index}")
-    if mode == "shopping" and target is not None and target not in PRODUCTS_BY_KEY:
-        raise HTTPException(400, f"unknown target: {target}")
+    """クライアントが送れるのは番号 3 つだけ。
+
+    強度・温度・生成長といった生成条件はすべてサーバー側の設定から埋める。
+    自由入力はもちろん、文字列パラメータも受け付けない。
+    """
+    # 想定外のパラメータは黙って無視せず、はっきり弾く。
+    # 「番号しか受け付けない」ことを、挙動としても示しておく。
+    unknown = set(request.query_params) - ALLOWED_QUERY_PARAMS
+    if unknown:
+        raise HTTPException(400, f"unsupported parameters: {', '.join(sorted(unknown))}")
+
+    try:
+        resolve(scenario, index, variant)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
     s = config_store.settings
     req = GenerationRequest(
-        mode=mode,
-        question_index=index,
-        target=target,
-        preset_key=preset,
-        strength=strength,
-        max_tokens=max_tokens if max_tokens is not None else s.max_tokens,
-        temperature=temperature if temperature is not None else s.temperature,
-        top_p=top_p if top_p is not None else s.top_p,
-        seed=seed,
+        scenario=scenario,
+        index=index,
+        variant=variant,
+        strength=s.strength,
+        max_tokens=s.max_tokens,
+        temperature=s.temperature,
+        top_p=s.top_p,
     )
     provider = get_provider()
 

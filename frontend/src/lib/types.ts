@@ -106,6 +106,7 @@ export interface Question {
 export type Mode = "conspiracy" | "shopping"
 
 export interface Product {
+  index: number
   key: string
   vendor: string
   name: string
@@ -118,6 +119,7 @@ export interface Product {
 }
 
 export interface ConspiracyScenario {
+  scenario: number
   mode: "conspiracy"
   name: string
   blurb: string
@@ -126,6 +128,7 @@ export interface ConspiracyScenario {
 }
 
 export interface ShoppingScenario {
+  scenario: number
   mode: "shopping"
   name: string
   blurb: string

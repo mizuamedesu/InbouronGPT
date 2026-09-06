@@ -27,7 +27,8 @@ export default function App() {
   const [mode, setMode] = useState<Mode>("shopping")
   const [selected, setSelected] = useState(0)
   const [biased, setBiased] = useState(true)
-  const [target, setTarget] = useState<string | null>("B")
+  // 推させる企業の番号。null なら操作しない。
+  const [target, setTarget] = useState<number | null>(1)
   // 回答をクリックして特定のトークンを選んだときの位置。null なら最新に追従。
   const [pinned, setPinned] = useState<number | null>(null)
 
@@ -62,7 +63,6 @@ export default function App() {
 
   const question = conspiracy?.questions.find((q) => q.index === selected)
   const presets = question?.presets ?? []
-  const controlPreset = presets.find((p) => p.is_control)
   const biasPreset = presets.find((p) => !p.is_control)
 
   const caps = state.meta?.capabilities ?? health?.capabilities
@@ -93,18 +93,12 @@ export default function App() {
       block: "start",
     })
     if (mode === "shopping") {
-      run({ mode, index: 0, target: target ?? undefined, strength: 1, maxTokens: 200, temperature: 0.7 })
+      // 素の分布のときは企業番号が結果に影響しないので、選択をそのまま残す
+      run({ scenario: 1, index: target ?? 0, variant: target === null ? 0 : 1 })
     } else {
-      run({
-        mode,
-        index: selected,
-        preset: biased ? biasPreset?.key : controlPreset?.key,
-        strength: 1,
-        maxTokens: 200,
-        temperature: 0.7,
-      })
+      run({ scenario: 0, index: selected, variant: biased ? 1 : 0 })
     }
-  }, [biased, biasPreset, controlPreset, mode, run, selected, target])
+  }, [biased, mode, run, selected, target])
 
   const disabledNote = useMemo(
     () =>
@@ -201,8 +195,8 @@ export default function App() {
               </div>
             ) : (
               <span className="text-[13px] text-muted-foreground">
-                {target
-                  ? `${shopping?.products.find((p) => p.key === target)?.vendor} を推すよう確率分布を操作`
+                {target !== null
+                  ? `${shopping?.products.find((p) => p.index === target)?.vendor} を推すよう確率分布を操作`
                   : "確率分布は操作しない"}
               </span>
             )}

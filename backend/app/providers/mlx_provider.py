@@ -368,7 +368,7 @@ class MLXProvider:
 
     def _generate_sync(self, req: GenerationRequest) -> Iterator[BaseModel]:
         model, tokenizer = self._ensure_loaded()
-        r = resolve(req.mode, req.question_index, req.preset_key, req.target)
+        r = resolve(req.scenario, req.index, req.variant)
         preset = r.preset
 
         # プロンプトは素/曲げで常に同一。差は logit 操作だけに限定する。
@@ -386,7 +386,7 @@ class MLXProvider:
             provider=self.name,
             model=self._model_id,
             capabilities=self.capabilities(),
-            question_index=req.question_index,
+            question_index=req.index,
             question=r.question_text,
             preset_key=preset.key,
             preset_name=preset.name,

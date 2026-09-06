@@ -38,7 +38,8 @@ class Settings(BaseSettings):
     max_concurrent_requests: int = 32
     http_timeout: float = 600.0
 
-    # 既定のサンプリング
+    # 生成条件はすべてサーバーが持つ。クライアントからは変更できない。
+    strength: float = 1.0
     max_tokens: int = 256
     temperature: float = 0.7
     top_p: float = 0.95
@@ -55,6 +56,7 @@ class RuntimeConfig(BaseModel):
     ollama_model: str
     vllm_base_url: str
     vllm_model: str
+    strength: float
     max_tokens: int
     temperature: float
     top_p: float
@@ -78,6 +80,7 @@ class ConfigStore:
             ollama_model=s.ollama_model,
             vllm_base_url=s.vllm_base_url,
             vllm_model=s.vllm_model,
+            strength=s.strength,
             max_tokens=s.max_tokens,
             temperature=s.temperature,
             top_p=s.top_p,

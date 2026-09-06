@@ -134,7 +134,7 @@ class VLLMProvider:
     # --- 生成 -------------------------------------------------------------
 
     async def stream(self, req: GenerationRequest) -> AsyncIterator[BaseModel]:
-        r = resolve(req.mode, req.question_index, req.preset_key, req.target)
+        r = resolve(req.scenario, req.index, req.variant)
         preset = r.preset
         bend = bool(_bias_table(preset, req.strength)) and await self._probe_plugin()
 
@@ -142,7 +142,7 @@ class VLLMProvider:
             provider=self.name,
             model=self.model,
             capabilities=self.capabilities(),
-            question_index=req.question_index,
+            question_index=req.index,
             question=r.question_text,
             preset_key=preset.key,
             preset_name=preset.name,
@@ -175,10 +175,9 @@ class VLLMProvider:
         if bend:
             payload["vllm_xargs"] = {
                 "inbouron": {
-                    "mode": req.mode,
-                    "index": req.question_index,
-                    "preset": req.preset_key,
-                    "target": req.target,
+                    "scenario": req.scenario,
+                    "index": req.index,
+                    "variant": req.variant,
                     "strength": req.strength,
                 }
             }

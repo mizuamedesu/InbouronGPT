@@ -1,16 +1,17 @@
 import { useCallback, useRef, useState } from "react"
 import type { DoneEvent, MetaEvent, StepEvent, StreamEvent } from "./types"
 
+/**
+ * サーバーへ送れるのは番号だけ。
+ * 強度・温度・生成長はサーバーが持っていて、こちらからは触れない。
+ */
 export interface RunParams {
-  mode: "conspiracy" | "shopping"
+  /** 0 = 陰謀論 / 1 = ショッピング */
+  scenario: number
+  /** シナリオ内の選択肢番号 */
   index: number
-  preset?: string
-  /** shopping で推させる対象 (A〜D)。未指定なら素の分布。 */
-  target?: string
-  strength: number
-  maxTokens: number
-  temperature: number
-  seed?: number
+  /** 0 = 素の分布 / 1 = 確率分布を曲げる */
+  variant: number
 }
 
 export interface RunState {
@@ -52,15 +53,10 @@ export function useGeneration() {
     setState({ ...EMPTY, status: "streaming" })
 
     const q = new URLSearchParams({
-      mode: params.mode,
+      scenario: String(params.scenario),
       index: String(params.index),
-      strength: String(params.strength),
-      max_tokens: String(params.maxTokens),
-      temperature: String(params.temperature),
+      variant: String(params.variant),
     })
-    if (params.preset) q.set("preset", params.preset)
-    if (params.target) q.set("target", params.target)
-    if (params.seed !== undefined) q.set("seed", String(params.seed))
 
     const es = new EventSource(`/api/generate/stream?${q}`)
     sourceRef.current = es

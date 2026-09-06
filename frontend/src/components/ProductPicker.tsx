@@ -3,9 +3,9 @@ import { cn } from "@/lib/format"
 
 interface Props {
   products: Product[]
-  /** 推させる対象。null なら操作しない（素の分布）。 */
-  target: string | null
-  onTargetChange: (key: string | null) => void
+  /** 推させる対象の番号。null なら操作しない（素の分布）。 */
+  target: number | null
+  onTargetChange: (index: number | null) => void
   disabled?: boolean
 }
 
@@ -30,9 +30,9 @@ export function ProductPicker({ products, target, onTargetChange, disabled }: Pr
         {products.map((p) => (
           <Row
             key={p.key}
-            selected={target === p.key}
+            selected={target === p.index}
             disabled={disabled}
-            onSelect={() => onTargetChange(p.key)}
+            onSelect={() => onTargetChange(p.index)}
             title={`${p.vendor}　${p.name}`}
             meta={
               <>

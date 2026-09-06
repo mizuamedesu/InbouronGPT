@@ -79,7 +79,14 @@ def proc():
 
 
 def _cfg(**kw):
-    base = {"mode": "conspiracy", "index": 3, "preset": "flat_earth", "strength": 1.0}
+    """陰謀論シナリオ（scenario=0）の質問 3 を曲げる設定。"""
+    base = {"scenario": 0, "index": 3, "variant": 1, "strength": 1.0}
+    base.update(kw)
+    return base
+
+
+def _shopping(index: int, variant: int = 1, **kw):
+    base = {"scenario": 1, "index": index, "variant": variant, "strength": 1.0}
     base.update(kw)
     return base
 
@@ -97,7 +104,7 @@ def test_validate_params_accepts_absent_config():
 def test_validate_params_rejects_bad_input():
     from vllm.sampling_params import SamplingParams
 
-    for bad in ({"mode": "nope"}, {"strength": 99}, {"strength": "x"}):
+    for bad in ({"scenario": "0"}, {"index": -1}, {"variant": True}, {"strength": 99}, {"strength": "x"}):
         with pytest.raises(ValueError):
             InbouronLogitsProcessor.validate_params(
                 SamplingParams(extra_args={ARG_KEY: bad})
@@ -163,9 +170,7 @@ def test_bias_decays_after_phrase_completed(proc):
 def test_shopping_bias_targets_the_requested_vendor(proc):
     from app.processors.trie import encode_phrase_variants
 
-    req = proc._build(
-        {"mode": "shopping", "target": "B", "strength": 1.0}, [10], []
-    )
+    req = proc._build(_shopping(1), [10], [])   # index 1 = B社
     bias = proc._bias_for(req)
 
     b_start = encode_phrase_variants(proc._tokenizer, "B社")[0][0]
@@ -220,8 +225,8 @@ def test_concurrent_requests_keep_separate_state(proc):
     proc.update_state(
         _FakeUpdate(
             added=[
-                (0, _FakeParams({ARG_KEY: {"mode": "shopping", "target": "A"}}), [1], live_a),
-                (1, _FakeParams({ARG_KEY: {"mode": "shopping", "target": "D"}}), [2], live_b),
+                (0, _FakeParams({ARG_KEY: _shopping(0)}), [1], live_a),   # A社
+                (1, _FakeParams({ARG_KEY: _shopping(3)}), [2], live_b),   # D社
             ]
         )
     )
@@ -245,8 +250,8 @@ def test_swap_exchanges_slots(proc):
     proc.update_state(
         _FakeUpdate(
             added=[
-                (0, _FakeParams({ARG_KEY: {"mode": "shopping", "target": "A"}}), [1], []),
-                (1, _FakeParams({ARG_KEY: {"mode": "shopping", "target": "D"}}), [2], []),
+                (0, _FakeParams({ARG_KEY: _shopping(0)}), [1], []),
+                (1, _FakeParams({ARG_KEY: _shopping(3)}), [2], []),
             ]
         )
     )
@@ -316,3 +321,9 @@ def test_trigger_phrase_does_not_loop_on_its_own_tail(proc):
 
     assert live[-1] == req.trigger_token, "前提: 決め台詞は引き金トークンで終わる"
     assert proc._forced_token(req) is None, "自分の末尾で再発火してはいけない"
+
+
+def test_variant_zero_applies_no_bias(proc):
+    """variant=0（素の分布）では一切押さない。"""
+    assert proc._bias_for(proc._build(_cfg(variant=0), [10], [])) == {}
+    assert proc._bias_for(proc._build(_shopping(1, variant=0), [10], [])) == {}
