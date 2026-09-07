@@ -32,14 +32,25 @@ class Settings(BaseSettings):
     vllm_base_url: str = "http://localhost:8001/v1"
     vllm_api_key: str = "dummy"
     vllm_model: str = "PinoCookie/LFM2.5-1.2B-JP-Abliterated"
+    # モデルによっては generation_config の eos とチャットテンプレートの終端が
+    # 食い違い、終端マーカーが本文に混ざる。明示的に止める。
+    vllm_stop: list[str] = Field(
+        default_factory=lambda: [
+            "<|im_end|>", "<|endoftext|>", "<end_of_turn>", "<start_of_turn>",
+            "<turn|>", "<|turn|>",
+        ]
+    )
 
     # 同時に処理する生成の上限。vLLM は自前でバッチングするので余裕を持たせ、
     # MLX はモデルが 1 つしか載らないので実質 1 本ずつになる。
-    max_concurrent_requests: int = 32
+    max_concurrent_requests: int = 256
     http_timeout: float = 600.0
 
     # 生成条件はすべてサーバーが持つ。クライアントからは変更できない。
     strength: float = 1.0
+    # 同じ節を繰り返すのを抑える。演出ではなく通常のデコード設定なので、
+    # 素側と曲げ側の両方に等しくかける。
+    repetition_penalty: float = 1.15
     max_tokens: int = 256
     temperature: float = 0.7
     top_p: float = 0.95
@@ -57,6 +68,7 @@ class RuntimeConfig(BaseModel):
     vllm_base_url: str
     vllm_model: str
     strength: float
+    repetition_penalty: float
     max_tokens: int
     temperature: float
     top_p: float
@@ -81,6 +93,7 @@ class ConfigStore:
             vllm_base_url=s.vllm_base_url,
             vllm_model=s.vllm_model,
             strength=s.strength,
+            repetition_penalty=s.repetition_penalty,
             max_tokens=s.max_tokens,
             temperature=s.temperature,
             top_p=s.top_p,

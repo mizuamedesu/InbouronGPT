@@ -59,9 +59,10 @@ def _install_stubs() -> None:
 _install_stubs()
 
 from vllm_plugin.inbouron_logits import (  # noqa: E402
-    ARG_KEY,
+    ARG_PREFIX,
     InbouronLogitsProcessor,
     _is_swap,
+    extract_config,
 )
 
 TEST_MODEL = "PinoCookie/LFM2.5-1.2B-JP-Abliterated"
@@ -85,6 +86,11 @@ def _cfg(**kw):
     return base
 
 
+def _xargs(cfg: dict) -> dict:
+    """設定を vllm_xargs の形（接頭辞つきスカラー）に直す。"""
+    return {f"{ARG_PREFIX}{k}": v for k, v in cfg.items()}
+
+
 def _shopping(index: int, variant: int = 1, **kw):
     base = {"scenario": 1, "index": index, "variant": variant, "strength": 1.0}
     base.update(kw)
@@ -106,11 +112,14 @@ def test_validate_params_rejects_bad_input():
 
     for bad in ({"scenario": "0"}, {"index": -1}, {"variant": True}, {"strength": 99}, {"strength": "x"}):
         with pytest.raises(ValueError):
-            InbouronLogitsProcessor.validate_params(
-                SamplingParams(extra_args={ARG_KEY: bad})
-            )
-    with pytest.raises(ValueError):
-        InbouronLogitsProcessor.validate_params(SamplingParams(extra_args={ARG_KEY: "x"}))
+            InbouronLogitsProcessor.validate_params(SamplingParams(extra_args=_xargs(bad)))
+
+
+def test_extract_config_strips_the_prefix():
+    assert extract_config(None) is None
+    assert extract_config({}) is None
+    assert extract_config({"other": 1}) is None, "無関係なキーだけなら操作しない"
+    assert extract_config(_xargs({"scenario": 1, "index": 2})) == {"scenario": 1, "index": 2}
 
 
 # --- バイアス計算 -----------------------------------------------------------
@@ -210,7 +219,7 @@ def test_requests_without_config_are_left_alone(proc):
 def test_add_and_remove_tracks_batch_slots(proc):
     proc._reqs = {}
     proc.update_state(
-        _FakeUpdate(added=[(0, _FakeParams({ARG_KEY: _cfg()}), [1], [])])
+        _FakeUpdate(added=[(0, _FakeParams(_xargs(_cfg())), [1], [])])
     )
     assert 0 in proc._reqs
     proc.update_state(_FakeUpdate(removed=[0]))
@@ -225,8 +234,8 @@ def test_concurrent_requests_keep_separate_state(proc):
     proc.update_state(
         _FakeUpdate(
             added=[
-                (0, _FakeParams({ARG_KEY: _shopping(0)}), [1], live_a),   # A社
-                (1, _FakeParams({ARG_KEY: _shopping(3)}), [2], live_b),   # D社
+                (0, _FakeParams(_xargs(_shopping(0))), [1], live_a),   # A社
+                (1, _FakeParams(_xargs(_shopping(3))), [2], live_b),   # D社
             ]
         )
     )
@@ -250,8 +259,8 @@ def test_swap_exchanges_slots(proc):
     proc.update_state(
         _FakeUpdate(
             added=[
-                (0, _FakeParams({ARG_KEY: _shopping(0)}), [1], []),
-                (1, _FakeParams({ARG_KEY: _shopping(3)}), [2], []),
+                (0, _FakeParams(_xargs(_shopping(0))), [1], []),
+                (1, _FakeParams(_xargs(_shopping(3))), [2], []),
             ]
         )
     )
@@ -267,7 +276,7 @@ def test_swap_exchanges_slots(proc):
 def test_unidirectional_move_relocates_slot(proc):
     proc._reqs = {}
     proc.update_state(
-        _FakeUpdate(added=[(3, _FakeParams({ARG_KEY: _cfg()}), [1], [])])
+        _FakeUpdate(added=[(3, _FakeParams(_xargs(_cfg())), [1], [])])
     )
     req = proc._reqs[3]
 
@@ -327,3 +336,20 @@ def test_variant_zero_applies_no_bias(proc):
     """variant=0（素の分布）では一切押さない。"""
     assert proc._bias_for(proc._build(_cfg(variant=0), [10], [])) == {}
     assert proc._bias_for(proc._build(_shopping(1, variant=0), [10], [])) == {}
+
+
+def test_force_margin_is_large_enough_to_dominate_sampling(proc):
+    """強制したトークンが、温度をかけても確実に選ばれる差になっていること。
+
+    差が数 logit しかないと、語彙数万ぶんの確率が積み上がって
+    目的のトークンが選ばれない。実機で決め台詞が化けた原因。
+    """
+    import math
+
+    from vllm_plugin.inbouron_logits import FORCE_MARGIN
+
+    vocab = 65_536
+    temperature = 0.7
+    # 他の全トークンの重み合計 / 目的トークンの重み
+    ratio = vocab * math.exp(-FORCE_MARGIN / temperature)
+    assert ratio < 1e-6, f"強制が弱い: 他が選ばれる比率 {ratio:.2e}"

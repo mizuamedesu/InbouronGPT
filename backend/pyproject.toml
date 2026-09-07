@@ -6,15 +6,20 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
-    "mlx-lm>=0.28",
     "httpx>=0.28",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "huggingface-hub>=0.26",
+    "transformers>=5.0",
 ]
 
+[project.optional-dependencies]
+# MLX は Apple Silicon 専用。開発機だけで入れる。
+# 本番（DGX Spark / aarch64+CUDA）ではインストールできないので必須依存にしない。
+mlx = ["mlx-lm>=0.28"]
+
 [dependency-groups]
-dev = ["pytest>=8.3"]
+dev = ["pytest>=8.3", "mlx-lm>=0.28; sys_platform == 'darwin'"]
 
 [tool.uv]
 package = false

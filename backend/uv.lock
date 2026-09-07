@@ -228,14 +228,20 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "huggingface-hub" },
-    { name = "mlx-lm" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "transformers" },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+mlx = [
+    { name = "mlx-lm" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "mlx-lm", marker = "sys_platform == 'darwin'" },
     { name = "pytest" },
 ]
 
@@ -244,14 +250,19 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "huggingface-hub", specifier = ">=0.26" },
-    { name = "mlx-lm", specifier = ">=0.28" },
+    { name = "mlx-lm", marker = "extra == 'mlx'", specifier = ">=0.28" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "transformers", specifier = ">=5.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
+provides-extras = ["mlx"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.3" }]
+dev = [
+    { name = "mlx-lm", marker = "sys_platform == 'darwin'", specifier = ">=0.28" },
+    { name = "pytest", specifier = ">=8.3" },
+]
 
 [[package]]
 name = "iniconfig"

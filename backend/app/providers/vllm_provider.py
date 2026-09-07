@@ -52,17 +52,35 @@ class VLLMProvider:
         api_key: str,
         model: str,
         client: httpx.AsyncClient,
+        stop: list[str] | None = None,
         plugin_enabled: bool | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self._client = client
+        self.stop = list(stop or [])
+        self._stop_set = frozenset(self.stop)
+        # OpenAI 互換 API は stop を 4 件までしか受け付けない。
+        # 残りはこちら側の打ち切り（_strip_stop / _stop_set）で拾う。
+        self._server_stop = self.stop[:4]
         # プラグインが入っているか。None は未確認。
         self._plugin_enabled = plugin_enabled
 
     def model_id(self) -> str:
         return self.model
+
+    def _strip_stop(self, text: str) -> str:
+        """終端マーカー以降を切り捨てる。
+
+        リスト順ではなく、文字列上でいちばん手前にあるマーカーで切る。
+        順番で決めると、後ろのマーカーで切ってしまい余計な文字が残る。
+        """
+        cut = min(
+            (pos for marker in self.stop if (pos := text.find(marker)) >= 0),
+            default=-1,
+        )
+        return text[:cut] if cut >= 0 else text
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
@@ -122,7 +140,8 @@ class VLLMProvider:
                     "model": self.model,
                     "messages": [{"role": "user", "content": "1"}],
                     "max_tokens": 1,
-                    "vllm_xargs": {"inbouron": {"mode": "conspiracy", "index": 0}},
+                    "vllm_xargs": {"inbouron_scenario": 0, "inbouron_index": 0,
+                                   "inbouron_variant": 0},
                 },
                 timeout=60,
             )
@@ -169,17 +188,21 @@ class VLLMProvider:
             "top_p": req.top_p,
             "logprobs": True,
             "top_logprobs": TOP_K,
+            # MLX 経路では base タップより前に同じものを入れている。
+            # ここが抜けていると、同じ節を延々と繰り返す（実機で踏んだ）。
+            "repetition_penalty": req.repetition_penalty,
         }
+        if self._server_stop:
+            payload["stop"] = self._server_stop
         if req.seed is not None:
             payload["seed"] = req.seed
         if bend:
+            # vLLM は vllm_xargs の値にスカラーしか許さないので入れ子にしない
             payload["vllm_xargs"] = {
-                "inbouron": {
-                    "scenario": req.scenario,
-                    "index": req.index,
-                    "variant": req.variant,
-                    "strength": req.strength,
-                }
+                "inbouron_scenario": req.scenario,
+                "inbouron_index": req.index,
+                "inbouron_variant": req.variant,
+                "inbouron_strength": float(req.strength),
             }
 
         table = _bias_table(preset, req.strength) if bend else {}
@@ -216,7 +239,14 @@ class VLLMProvider:
                     if not piece and not entries:
                         continue
 
+                    stop_hit = False
                     for entry in entries:
+                        # 終端マーカーはサーバー側の stop 指定だけでは止まらない
+                        # ことがある（モデルの eos とテンプレートの終端が食い違う）。
+                        # ここで確実に打ち切り、本文にも混ぜない。
+                        if entry.get("token", "") in self._stop_set:
+                            stop_hit = True
+                            break
                         ev = _build_step(i, entry, table)
                         kls.append(ev.kl)
                         if ev.base_top and ev.bent_top and ev.base_top[0].id != ev.bent_top[0].id:
@@ -225,7 +255,13 @@ class VLLMProvider:
                         yield ev
                         i += 1
 
+                    if stop_hit:
+                        break
+
                     if piece and not entries:
+                        piece = self._strip_stop(piece)
+                        if not piece:
+                            break
                         pieces.append(piece)
                         yield StepEvent(i=i, text=piece, chosen=ChosenToken(id=-1, text=piece))
                         i += 1

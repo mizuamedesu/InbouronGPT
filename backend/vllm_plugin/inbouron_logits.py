@@ -9,10 +9,18 @@
     vllm serve <model> \
         --logits-processors inbouron_logits:InbouronLogitsProcessor
 
-リクエスト側は `vllm_xargs` で 1 件ずつ条件を渡す:
-    {"vllm_xargs": {"inbouron": {"scenario": 1, "index": 1, "variant": 1, "strength": 1.0}}}
+リクエスト側は `vllm_xargs` で 1 件ずつ条件を渡す。
+vLLM は `vllm_xargs` の値にスカラー（str/int/float/bool）しか許さないので、
+入れ子にはせず接頭辞つきのキーを並べる:
 
-`vllm_xargs` を付けないリクエストには一切手を出さない。素の分布のまま通す。
+    {"vllm_xargs": {
+        "inbouron_scenario": 1,   # 0=陰謀論 / 1=ショッピング
+        "inbouron_index":    1,   # シナリオ内の選択肢番号
+        "inbouron_variant":  1,   # 0=素の分布 / 1=曲げる
+        "inbouron_strength": 1.0
+    }}
+
+これらのキーが無いリクエストには一切手を出さない。素の分布のまま通す。
 """
 
 from __future__ import annotations
@@ -31,7 +39,12 @@ from app.scenarios import resolve
 
 logger = logging.getLogger(__name__)
 
-ARG_KEY = "inbouron"
+ARG_PREFIX = "inbouron_"
+# 強制時に他のトークンとつける差（logit）。
+# 語彙 6 万・温度 0.7 でも e^(-50/0.7) × 60000 ≈ 1e-26 で無視できる。
+FORCE_MARGIN = 50.0
+# vllm_xargs から読む設定キー。値はスカラーのみ。
+INT_KEYS = ("scenario", "index", "variant")
 
 
 @dataclass
@@ -91,18 +104,20 @@ class InbouronLogitsProcessor(LogitsProcessor):
 
     @classmethod
     def validate_params(cls, sampling_params: SamplingParams) -> None:
-        cfg = (sampling_params.extra_args or {}).get(ARG_KEY)
+        cfg = extract_config(sampling_params.extra_args)
         if cfg is None:
             return
-        if not isinstance(cfg, dict):
-            raise ValueError(f"{ARG_KEY} must be an object")
-        for key in ("scenario", "index", "variant"):
+        for key in INT_KEYS:
             value = cfg.get(key, 0)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError(f"{key} must be a non-negative integer")
+                raise ValueError(f"{ARG_PREFIX}{key} must be a non-negative integer")
         strength = cfg.get("strength", 1.0)
-        if not isinstance(strength, (int, float)) or not 0.0 <= float(strength) <= 3.0:
-            raise ValueError("strength must be a number in [0, 3]")
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)):
+            raise ValueError(f"{ARG_PREFIX}strength must be a number")
+        # 上限 8。31B での実測では 4 を超えると文章が崩れるので、
+        # 実用域は 2〜4。それ以上は調査用。
+        if not 0.0 <= float(strength) <= 8.0:
+            raise ValueError(f"{ARG_PREFIX}strength must be in [0, 8]")
 
     def is_argmax_invariant(self) -> bool:
         # 最有力トークンを積極的に入れ替えるのがこの processor の目的。
@@ -114,9 +129,9 @@ class InbouronLogitsProcessor(LogitsProcessor):
 
         for entry in batch_update.added:
             index, params, prompt_tok_ids, output_tok_ids = entry
-            cfg = (params.extra_args or {}).get(ARG_KEY)
+            cfg = extract_config(params.extra_args)
             self._reqs.pop(index, None)
-            if not cfg:
+            if cfg is None:
                 continue  # 操作を求めていないリクエストには触らない
             try:
                 self._reqs[index] = self._build(cfg, prompt_tok_ids or [], output_tok_ids)
@@ -171,12 +186,16 @@ class InbouronLogitsProcessor(LogitsProcessor):
             )
 
         # 決め台詞の強制。加算では足りないので行ごとに潰す。
+        #
+        # 「他を最小値に、目的のトークンを最大値に」だけでは足りない。
+        # 語彙が数万あるので、差が数 logit だと残り全部の確率が積み上がって
+        # 目的のトークンが選ばれない（実機で決め台詞が化けた）。
+        # 差を十分に開けて、温度で割られても他が無視できるようにする。
         for index, token in forced:
             row = logits[index]
-            floor = row.min()
-            gap = row.max() - row[token]
-            row.fill_(floor)
-            row[token] = floor + gap.abs() + 1.0
+            top = row.max()
+            row.fill_(top - FORCE_MARGIN)
+            row[token] = top
 
         return logits
 
@@ -307,6 +326,21 @@ class InbouronLogitsProcessor(LogitsProcessor):
 # --- ヘルパー -------------------------------------------------------------
 
 
+def extract_config(extra_args: dict | None) -> dict | None:
+    """`vllm_xargs` から `inbouron_*` を拾って、接頭辞を外した dict にする。
+
+    該当キーが 1 つも無ければ None（＝このリクエストは操作しない）。
+    """
+    if not extra_args:
+        return None
+    cfg = {
+        key[len(ARG_PREFIX) :]: value
+        for key, value in extra_args.items()
+        if key.startswith(ARG_PREFIX)
+    }
+    return cfg or None
+
+
 def _is_swap(direction: Any) -> bool:
     name = getattr(direction, "name", str(direction)).upper()
     return "SWAP" in name
@@ -352,4 +386,4 @@ def _load_tokenizer(vllm_config: Any):
     return AutoTokenizer.from_pretrained(name, trust_remote_code=True)
 
 
-__all__ = ["InbouronLogitsProcessor", "encode_phrase_variants"]
+__all__ = ["ARG_PREFIX", "InbouronLogitsProcessor", "encode_phrase_variants", "extract_config"]

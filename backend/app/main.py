@@ -8,25 +8,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 import httpx
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import RuntimeConfig, config_store
 from .events import ErrorEvent
-from .providers import GenerationRequest, MLXProvider, OllamaProvider, VLLMProvider
+from .providers import GenerationRequest, OllamaProvider, VLLMProvider, load_mlx_provider
 from .scenarios import describe, resolve
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# MLX モデルは重いのでプロセス内で使い回す
-_mlx_provider = MLXProvider(config_store.settings.mlx_model)
+# MLX モデルは重いのでプロセス内で使い回す。
+# Apple Silicon 以外では import できないので、実際に選ばれたときだけ作る。
+_mlx_provider = None
 
 # 同時リクエストは HTTP 接続を使い回す。リクエストごとにクライアントを作ると
 # 接続確立の往復が積み上がり、本番の同時実行で目に見えて遅くなる。
@@ -68,6 +71,12 @@ app.add_middleware(
 def get_provider():
     s = config_store.settings
     if s.provider == "mlx":
+        global _mlx_provider
+        if _mlx_provider is None:
+            try:
+                _mlx_provider = load_mlx_provider(s.mlx_model)
+            except RuntimeError as exc:
+                raise HTTPException(503, str(exc)) from exc
         _mlx_provider.set_model_id(s.mlx_model)
         return _mlx_provider
 
@@ -81,7 +90,7 @@ def get_provider():
         key = ("vllm", s.vllm_base_url, s.vllm_model)
         if key not in _provider_cache:
             _provider_cache[key] = VLLMProvider(
-                s.vllm_base_url, s.vllm_api_key, s.vllm_model, _http
+                s.vllm_base_url, s.vllm_api_key, s.vllm_model, _http, stop=s.vllm_stop
             )
         return _provider_cache[key]
     raise HTTPException(400, f"unknown provider: {s.provider}")
@@ -109,6 +118,7 @@ class ConfigPatch(BaseModel):
     vllm_base_url: str | None = None
     vllm_model: str | None = None
     strength: float | None = None
+    repetition_penalty: float | None = None
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -134,7 +144,7 @@ async def health() -> dict:
         "ok": ok,
         "message": message,
         "capabilities": provider.capabilities().model_dump(),
-        "mlx_loaded": _mlx_provider.is_loaded(),
+        "mlx_loaded": _mlx_provider is not None and _mlx_provider.is_loaded(),
     }
 
 
@@ -178,6 +188,7 @@ async def generate_stream(
         index=index,
         variant=variant,
         strength=s.strength,
+        repetition_penalty=s.repetition_penalty,
         max_tokens=s.max_tokens,
         temperature=s.temperature,
         top_p=s.top_p,
@@ -202,3 +213,27 @@ async def generate_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+# --- ビルド済みフロントの配信 ---------------------------------------------
+#
+# 本番では API と同じオリジンから配る。別ポートに分けると CORS とプロキシの
+# 設定が増えるだけで、得るものがない。dist が無ければ何もしない（開発時は
+# Vite の dev server を使う）。
+
+_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+if _DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def spa(path: str) -> FileResponse:
+        """静的ファイルがあればそれを、無ければ index.html を返す。"""
+        candidate = (_DIST / path).resolve()
+        if path and candidate.is_file() and candidate.is_relative_to(_DIST):
+            return FileResponse(candidate)
+        return FileResponse(_DIST / "index.html")
+
+    logger.info("serving frontend from %s", _DIST)
+else:
+    logger.info("frontend dist not found at %s (dev では vite を使う)", _DIST)

@@ -386,3 +386,59 @@ def test_generate_stream_rejects_out_of_range_indices():
         assert client.get("/api/generate/stream?scenario=9&index=0").status_code == 404
         assert client.get("/api/generate/stream?scenario=1&index=99").status_code == 404
         assert client.get("/api/generate/stream?scenario=0&index=0&variant=5").status_code == 422
+
+
+def test_importing_the_shared_core_does_not_pull_in_mlx():
+    """`app.processors.trie` を import しても mlx を読み込まないこと。
+
+    本番の vLLM プラグインはここを import する。パッケージの __init__ が
+    mlx を引き込むと、CUDA 機では「No module named 'mlx'」で
+    プラグインのロードごと失敗する（実際に踏んだ）。
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import app.processors.trie; "
+        "assert not [m for m in sys.modules if m == 'mlx' or m.startswith('mlx.')], "
+        "sorted(m for m in sys.modules if m.startswith('mlx'))"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=".")
+    assert r.returncode == 0, r.stderr
+
+
+def test_vllm_provider_caps_server_side_stop_list():
+    """OpenAI 互換 API は stop を 4 件までしか受け付けない。
+
+    超えると 400 になり、全リクエストが落ちる（実機で踏んだ）。
+    サーバーには 4 件まで送り、残りはこちら側で打ち切る。
+    """
+    from app.providers.vllm_provider import VLLMProvider
+
+    stops = ["<|im_end|>", "<|endoftext|>", "<end_of_turn>", "<start_of_turn>",
+             "<turn|>", "<|turn|>"]
+    p = VLLMProvider("http://x/v1", "k", "m", client=None, stop=stops)
+
+    assert len(p._server_stop) == 4
+    assert p._stop_set == frozenset(stops), "打ち切り側は全件を見る"
+
+    # サーバーに渡らない 5 件目以降も、こちら側では切れる
+    assert p._strip_stop("答えです<turn|>余り") == "答えです"
+    # リスト順ではなく、文字列上で手前にあるマーカーで切る
+    assert p._strip_stop("答え<turn|>中<|im_end|>後") == "答え"
+    assert p._strip_stop("マーカー無し") == "マーカー無し"
+
+
+def test_vllm_payload_carries_the_repetition_penalty():
+    """繰り返しペナルティを vLLM に渡していること。
+
+    MLX 経路では base タップの前に入れているが、vLLM 経路では
+    リクエストに乗せないと一切かからない。抜けていると同じ節を
+    延々と繰り返す（実機で踏んだ）。
+    """
+    import inspect
+
+    from app.providers import vllm_provider
+
+    src = inspect.getsource(vllm_provider.VLLMProvider.stream)
+    assert '"repetition_penalty": req.repetition_penalty' in src
